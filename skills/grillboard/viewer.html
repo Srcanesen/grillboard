@@ -1338,7 +1338,7 @@
         }
         const editor = card.querySelector('.answer-editor');
         if (editor) { if (editor.value !== answer.text) editor.value = answer.text; editor.readOnly = q.pending || sendingAnswers; growAnswer(editor); }
-        const accept = card.querySelector('.accept-recommendation'); if (accept) accept.disabled = sendingAnswers;
+        const accept = card.querySelector('.accept-recommendation'); if (accept) { accept.disabled = q.pending || sendingAnswers; accept.hidden = q.pending; }
       }
       renderRoundBar(); measureAndLayout();
     }
@@ -1428,7 +1428,7 @@
       const body = element('div', 'question-body');
       const badges = element('div', 'badges'); badges.append(element('span', 'question-id', questionLabel(q, labels)));
       if (q.status !== 'settled') badges.append(statusBadge(q.status, labels));
-      if (pending) badges.append(element('span', 'badge', labels.sent));
+      if (pending) badges.append(element('span', 'badge pending-badge', labels.sent));
       if (q.reopened) badges.append(element('span', 'badge reopened', labels.reopened));
       top.append(badges);
       heading.append(top, element('h3', 'question-title', q.title)); card.append(heading, body);
@@ -1469,7 +1469,7 @@
               row.classList.toggle('picked', answer.option === option.id);
               row.tabIndex = editable && (answer.option === option.id || (answer.option === null && option === q.options[0])) ? 0 : -1;
               row.addEventListener('keydown', event => {
-                if (!editable || sendingAnswers || event.target !== row) return;
+                if (currentSession.questionsById[q.id].pending || sendingAnswers || event.target !== row) return;
                 if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
                   event.preventDefault(); event.stopPropagation();
                   const rows = [...options.querySelectorAll('[role="radio"]')], delta = ['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 1;
@@ -1478,7 +1478,7 @@
                   next.focus({ preventScroll: true });
                 } else if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); chooseAnswer(q.id, option.id); }
               });
-              row.addEventListener('click', event => { if (event.detail === 0 && event.target === row && editable) chooseAnswer(q.id, option.id); });
+              row.addEventListener('click', event => { if (event.detail === 0 && event.target === row && !currentSession.questionsById[q.id].pending) chooseAnswer(q.id, option.id); });
             }
             if (tiled) {
               const ref = Object.prototype.hasOwnProperty.call(q.optionPictures, option.id) ? q.optionPictures[option.id] : null;
@@ -1521,8 +1521,8 @@
           editor.readOnly = !!pending || sendingAnswers; editor.dataset.answerQuestion = q.id;
           editor.addEventListener('input', () => { draftFor(q.id).text = editor.value; growAnswer(editor); answerError = ''; renderRoundBar(); measureAndLayout(); });
           details.append(editor);
-          if (editable && !q.options.length && q.recommendation) details.append(button(labels.acceptRecommendation, labels.acceptRecommendation, () => {
-            draftFor(q.id).text = q.recommendation.slice(0, GrillSession.ANSWER_TEXT_MAX); refreshAnswerControls(); editor.focus({ preventScroll: true });
+          if (serverMode && q.status === 'asking' && !q.options.length && q.recommendation) details.append(button(labels.acceptRecommendation, labels.acceptRecommendation, () => {
+            draftFor(q.id).text = currentSession.questionsById[q.id].recommendation.slice(0, GrillSession.ANSWER_TEXT_MAX); refreshAnswerControls(); editor.focus({ preventScroll: true });
           }, 'accept-recommendation'));
         }
         if (!interactive && q.answer.text) details.append(element('p', 'answer-text' + (q.answer.option === null ? ' chosen' : ''), labels.answer + ': ' + q.answer.text));
@@ -1901,9 +1901,19 @@
       sizeSketchFrame(frame, surface, { ...sketch, width: viewport.width, height: viewport.height }, scale);
     }
 
-    // Good reads replace card contents, measure them, and keep the current view.
+    // Good reads reconcile cards, measure them, and keep the current view.
     function render(session, user) {
       const firstRender = currentSession === null;
+      function questionContent(q, data) {
+        const { pending, pendingItem, ...content } = q;
+        return [content, q.validDependencies.map(id => [id, data.questionsById[id].status]),
+          expandedCards.has(q.id), q.research.map(note => openResearchPanels.has(note.id))];
+      }
+      // Disclosure controls already changed the mounted card since the last render.
+      if (currentSession) for (const q of currentSession.questions) {
+        const record = nodeRecords.get(q.id);
+        if (record) record.signature = JSON.stringify([questionContent(q, currentSession), currentLabels, labelLanguage(currentSession.lang), serverMode]);
+      }
       const scrollTop = spec.scrollTop;
       const focused = document.activeElement;
       const answerFocus = focused && focused.matches('.answer-editor') ? { id: focused.dataset.answerQuestion, start: focused.selectionStart, end: focused.selectionEnd } : null;
@@ -1919,7 +1929,6 @@
       variantObserver.disconnect();
       const data = currentSession;
       const labels = currentLabels;
-      stepViews = new Map();
       for (const id of researchSteps.keys()) if (!data.researchByStatus.running.some(note => note.id === id)) researchSteps.delete(id);
       if (readerState && !data.research.some(note => note.id === readerState.id)) closeReader();
       document.documentElement.lang = labelLanguage(data.lang);
@@ -1937,6 +1946,7 @@
       renderToolbar(); updateSpec();
       world.setAttribute('role', 'tree'); world.setAttribute('aria-label', data.title || labels.idea);
       hoveredQuestion = '';
+      const previousNodes = nodeRecords;
       cardNodes = new Map(); nodeRecords = new Map();
       connectorLayer = document.createElementNS(svgNamespace, 'svg');
       connectorLayer.classList.add('connectors'); connectorLayer.setAttribute('aria-hidden', 'true');
@@ -1946,44 +1956,72 @@
       for (const [id, entry] of sketchNodes) {
         if (!liveSketches.has(id)) { entry.node.remove(); sketchNodes.delete(id); }
       }
-      const keptNodes = new Set([...sketchNodes.values()].map(entry => entry.node));
-      for (const child of Array.from(world.children)) if (!keptNodes.has(child)) child.remove();
+      for (const child of Array.from(world.children)) if (!child.classList.contains('node')) child.remove();
+      function reuse(id, content, build, highlighted = false) {
+        const signature = JSON.stringify([content, labels, labelLanguage(data.lang), serverMode]);
+        const previous = previousNodes.get(id);
+        const node = previous && previous.signature === signature && !highlighted ? previous.element : build();
+        if (previous && previous.element !== node) previous.element.remove();
+        if (!highlighted) node.classList.remove('highlight');
+        node.contentSignature = signature;
+        return node;
+      }
       world.prepend(connectorLayer); world.append(socketLayer);
       const questionsById = data.questionsById;
-      const idea = element('div', 'idea-card');
-      idea.append(element('span', 'caption', labels.idea), element('strong', '', data.title));
-      idea.append(element('p', 'idea-summary', data.idea));
-      idea.append(farLabel(data.title));
-      idea.setAttribute('role', 'treeitem'); idea.setAttribute('aria-level', '1');
+      const idea = reuse(ideaId, [data.title, data.idea], () => {
+        const idea = element('div', 'idea-card');
+        idea.append(element('span', 'caption', labels.idea), element('strong', '', data.title));
+        idea.append(element('p', 'idea-summary', data.idea));
+        idea.append(farLabel(data.title));
+        idea.setAttribute('role', 'treeitem'); idea.setAttribute('aria-level', '1');
+        return idea;
+      });
       registerNode(ideaId, idea, { kind: 'idea' });
 
       for (const q of data.questions) {
         if (cardNodes.has(q.id)) continue;
         if (changes.collapsedQuestions.includes(q.id)) expandedCards.delete(q.id);
-        const card = questionCard(q, labels, questionsById, changes);
+        const highlighted = Object.prototype.hasOwnProperty.call(changes.highlights, q.id) || q.research.some(note => changes.changedResearch.includes(note.id));
+        const card = reuse(q.id, questionContent(q, data),
+          () => questionCard(q, labels, questionsById, changes), highlighted);
+        if (serverMode && q.status === 'asking') {
+          card.classList.toggle('pending', q.pending);
+          let badge = card.querySelector('.pending-badge');
+          if (q.pending && !badge) { badge = element('span', 'badge pending-badge', labels.sent); const badges = card.querySelector('.badges'); badges.insertBefore(badge, badges.querySelector('.reopened')); }
+          if (!q.pending && badge) badge.remove();
+          const accept = card.querySelector('.accept-recommendation'); if (accept) accept.hidden = q.pending;
+        }
         registerNode(q.id, card, { kind: 'question', validDependencies: q.validDependencies });
         cardNodes.set(q.id, card);
       }
       for (const ref of data.boardRefs) {
         const id = ref.nodeId;
-        const card = referenceCard(ref);
+        const card = reuse(id, [ref, Object.prototype.hasOwnProperty.call(questionsById, ref.parsedTarget.questionId)], () => referenceCard(ref), Object.prototype.hasOwnProperty.call(changes.highlights, id));
         if (Object.prototype.hasOwnProperty.call(changes.highlights, ref.nodeId)) card.classList.add('highlight');
         registerNode(id, card, { kind: 'reference', anchorId: ref.anchorId, parsedTarget: ref.parsedTarget, ref });
       }
       for (const note of data.boardResearch) {
-        const card = researchCard(note);
+        const card = reuse(note.nodeId, note, () => researchCard(note), Object.prototype.hasOwnProperty.call(changes.highlights, note.nodeId));
         if (Object.prototype.hasOwnProperty.call(changes.highlights, note.nodeId)) card.classList.add('highlight');
         registerNode(GrillSession.nodeId('research', note.id), card, { kind: 'research', parsedTarget: note.parsedTarget });
       }
       const reports = data.boardReports;
       for (const note of reports) {
-        const card = reportCard(note, Object.prototype.hasOwnProperty.call(questionsById, note.parsedTarget.questionId), changes);
+        const stacked = Object.prototype.hasOwnProperty.call(questionsById, note.parsedTarget.questionId);
+        const card = reuse(note.reportNodeId, [note, stacked], () => reportCard(note, stacked, changes), Object.prototype.hasOwnProperty.call(changes.highlights, note.reportNodeId));
         registerNode(GrillSession.nodeId('report', note.id), card, { kind: 'report', parsedTarget: note.parsedTarget, noteId: note.id, note });
       }
       for (const sketch of data.boardSketches) updateSketchNode(sketch, changes);
+      for (const [id, record] of previousNodes) if (!nodeRecords.has(id)) record.element.remove();
+      for (const [id, entries] of stepViews) {
+        const live = entries.filter(entry => entry.region.isConnected);
+        if (live.length) stepViews.set(id, live); else stepViews.delete(id);
+      }
+      for (const visual of world.querySelectorAll('.variant-preview')) variantObserver.observe(visual);
+      refreshAnswerControls();
       for (const editor of world.querySelectorAll('.answer-editor')) growAnswer(editor);
       saveNodeSizes(); measureAndLayout(); selectQuestion(selectedQuestion);
-      if (focusId && nodeRecords.has(focusId)) {
+      if (focusId && nodeRecords.has(focusId) && !focused.isConnected) {
         const node = nodeRecords.get(focusId).element;
         const editor = answerFocus && node.querySelector('.answer-editor');
         const radio = radioFocus && [...node.querySelectorAll('[data-answer-option]')].find(row => row.dataset.answerOption === radioFocus.option);
@@ -2002,7 +2040,7 @@
     function registerNode(id, node, metadata) {
       node.classList.add('node'); node.dataset.nodeId = id;
       if (node.parentNode !== world) world.append(node);
-      const record = { id, element: node, ...metadata };
+      const record = { id, element: node, signature: node.contentSignature, ...metadata };
       nodeRecords.set(id, record);
       addResizeHandle(record); applyNodeSize(record);
     }
