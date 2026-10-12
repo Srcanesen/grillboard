@@ -185,3 +185,79 @@ test('Chrome demo baseline: lr', () => {
     "sketch:k1": {"x": -458, "y": -423},
   });
 });
+
+test('first layout has no entering or moving nodes', () => {
+  assert.deepEqual(layout.motion(null, layout.layout(input([question('q1')]))), { entering: [], moving: [] });
+});
+
+test('one new question enters without a delay', () => {
+  assert.deepEqual(layout.motion(layout.layout(input([])), layout.layout(input([question('q1')]))), {
+    entering: [{ id: 'q1', delay: 0 }], moving: [],
+  });
+});
+
+test('two new questions enter left to right, 60ms apart', () => {
+  assert.deepEqual(layout.motion(layout.layout(input([])), layout.layout(input([question('q1'), question('q2')]))), {
+    entering: [{ id: 'q1', delay: 0 }, { id: 'q2', delay: 60 }], moving: [],
+  });
+});
+
+test('eight entering questions cap the last delays at 360ms', () => {
+  const current = layout.layout(input(Array.from({ length: 8 }, (_, index) => question('q' + (index + 1)))));
+  assert.deepEqual(layout.motion(layout.layout(input([])), current), {
+    entering: [
+      { id: 'q1', delay: 0 }, { id: 'q2', delay: 60 }, { id: 'q3', delay: 120 }, { id: 'q4', delay: 180 },
+      { id: 'q5', delay: 240 }, { id: 'q6', delay: 300 }, { id: 'q7', delay: 360 }, { id: 'q8', delay: 360 },
+    ], moving: [],
+  });
+});
+
+for (const flow of ['td', 'lr']) test('motion orders parents before children in ' + flow, () => {
+  const nodes = [question('q3', ['q1']), question('q2'), question('q1')];
+  assert.deepEqual(layout.motion(layout.layout(input([], { flow })), layout.layout(input(nodes, { flow }))), {
+    entering: [{ id: 'q2', delay: 0 }, { id: 'q1', delay: 60 }, { id: 'q3', delay: 120 }], moving: [],
+  });
+});
+
+test('motion reports exact display offsets for staying nodes that moved', () => {
+  const previous = layout.layout(input([question('q1'), question('q2', ['q1'])]));
+  const current = layout.layout(input([question('q1'), question('q2', ['q1'])], { manualOffsets: { q1: { dx: 25, dy: -40 } } }));
+  assert.deepEqual(layout.motion(previous, current), {
+    entering: [], moving: [{ id: 'q1', dx: -25, dy: 40 }, { id: 'q2', dx: -25, dy: 40 }],
+  });
+});
+
+test('equal layouts and departing nodes have no motion', () => {
+  const previous = layout.layout(input([question('q1')]));
+  assert.deepEqual(layout.motion(previous, layout.layout(input([question('q1')]))), { entering: [], moving: [] });
+  assert.deepEqual(layout.motion(previous, layout.layout(input([]))), { entering: [], moving: [] });
+});
+
+test('motion leaves both layout inputs untouched', () => {
+  const previous = JSON.parse(JSON.stringify(layout.layout(input([question('q1')]))));
+  const current = JSON.parse(JSON.stringify(layout.layout(input([question('q1'), question('q2')]))));
+  const before = JSON.stringify([previous, current]);
+  assert.deepEqual(layout.motion(previous, current), {
+    entering: [{ id: 'q2', delay: 0 }], moving: [{ id: 'q1', dx: 164, dy: 0 }],
+  });
+  assert.equal(JSON.stringify([previous, current]), before);
+});
+
+for (const flow of ['td', 'lr']) test('motion uses the sibling axis of ' + flow + ' for entering order', () => {
+  const manualOffsets = flow === 'td' ? { q1: { dx: 1000, dy: -1000 } } : { q1: { dx: -1000, dy: 1000 } };
+  const current = layout.layout(input([question('q1'), question('q2')], { flow, manualOffsets }));
+  assert.deepEqual(layout.motion(layout.layout(input([], { flow })), current), {
+    entering: [{ id: 'q2', delay: 0 }, { id: 'q1', delay: 60 }], moving: [],
+  });
+});
+
+test('motion includes entering attachments and sketches after their parent', () => {
+  const nodes = [question('q1'), ...attachments, { id: 'sketch:k1', kind: 'sketch', width: 200, height: 150 }];
+  const current = layout.layout(input(nodes));
+  assert.deepEqual(layout.motion(layout.layout(input([])), current), {
+    entering: [
+      { id: 'q1', delay: 0 }, { id: 'sketch:k1', delay: 60 }, { id: 'report:s1', delay: 120 },
+      { id: 'ref:r1', delay: 180 }, { id: 'ref:r2', delay: 240 },
+    ], moving: [],
+  });
+});

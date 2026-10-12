@@ -623,7 +623,9 @@
     // layout({ nodes, flow, constants, manualOffsets? }) -> read-only board placement; nodes carry id, kind, width, height, validDependencies?, anchorId?, parsedTarget?, noteId?.
     // cluster({ node, refs, reports, flow, manualOffsets? }) -> { width, height, positions, outputId } for one card and its attachments; node may carry x/y, reports may carry live x/y.
     // cluster positions include direct attachment offsets; outputId is the lowest card/report without a direct report offset.
-    // Result fields: positions/basePositions (id -> { x, y }, with/without inherited offsets), parents, secondary, clusters, levels, edges, boardRefs, boardResearch, boardRefX, researchCaptionY, boardReports, sketches.
+    // motion(previous, current) -> { entering: [{ id, delay }], moving: [{ id, dx, dy }] }; delays are 60ms apart, capped at 360ms; dx/dy are old minus final positions.
+    // A null previous layout skips motion; entering order is parents first, then left to right in td or top to bottom in lr.
+    // Result fields: flow, positions/basePositions (id -> { x, y }, with/without inherited offsets), parents, secondary, clusters, levels, edges, boardRefs, boardResearch, boardRefX, researchCaptionY, boardReports, sketches.
     // Clusters/levels contain { id, width, height, cardWidth, cardHeight, refs, reports, children, depth, x, y, span, cardSpan, levelSize }; edges contain { from, to }; sketches contains ids.
     // flow is 'td' or 'lr'; constants carry ideaWidth, gapX, gapY, lrGapX, lrGapY; manualOffsets maps ids to { dx, dy }; inputs are never changed.
     const GrillLayout = (() => {
@@ -786,10 +788,26 @@
           }
           point.x += dx; point.y += dy;
         }
-        return freeze({ positions, basePositions, parents, secondary, clusters, levels, edges, boardRefs, boardResearch, boardRefX, researchCaptionY, boardReports, sketches: sketches.map(node => node.id) });
+        return freeze({ flow, positions, basePositions, parents, secondary, clusters, levels, edges, boardRefs, boardResearch, boardRefX, researchCaptionY, boardReports, sketches: sketches.map(node => node.id) });
       }
 
-      return { layout, cluster };
+      function motion(previous, current) {
+        const entering = [], moving = [];
+        if (!previous) return { entering, moving };
+        function depth(id) { return current.parents[id] ? depth(current.parents[id]) + 1 : 0; }
+        const axis = current.flow === 'lr' ? 'y' : 'x', other = axis === 'x' ? 'y' : 'x';
+        const ids = Object.keys(current.positions).sort((a, b) => depth(a) - depth(b)
+          || current.positions[a][axis] - current.positions[b][axis]
+          || current.positions[a][other] - current.positions[b][other]);
+        for (const id of ids) {
+          const old = previous.positions[id], point = current.positions[id];
+          if (!old) entering.push({ id, delay: Math.min(entering.length * 60, 360) });
+          else if (old.x !== point.x || old.y !== point.y) moving.push({ id, dx: old.x - point.x, dy: old.y - point.y });
+        }
+        return { entering, moving };
+      }
+
+      return { layout, cluster, motion };
     })();
   </script>
   <!-- The changes block compares two session models: what is new, what to highlight, where to look. -->
@@ -1903,6 +1921,8 @@
 
     // Good reads reconcile cards, measure them, and keep the current view.
     function render(session, user) {
+      finishMotion();
+      const previousLayout = graph;
       const firstRender = currentSession === null;
       function questionContent(q, data) {
         const { pending, pendingItem, ...content } = q;
@@ -1920,6 +1940,7 @@
       const radioFocus = focused && focused.matches('[data-answer-option]') ? { id: focused.closest('.question-card').dataset.questionId, option: focused.dataset.answerOption } : null;
       const focusId = focused && focused.closest('.node') && focused.closest('.node').dataset.nodeId;
       currentSession = GrillSession.model(session, user, { serverMode, baseUrl: sessionUrl });
+      const changedData = JSON.stringify(previousSession) !== JSON.stringify(currentSession);
       const changes = GrillChanges.between(previousSession, currentSession, { idle: Date.now() - lastInteraction >= 10000 });
       previousSession = currentSession;
       currentUserRefs = currentSession.userRefs;
@@ -2031,6 +2052,7 @@
       }
       renderRoundBar();
       syncResearchSteps();
+      if (changedData) startMotion(GrillLayout.motion(previousLayout, graph));
       if (firstRender) focusView(false);
       else if (changes.viewTarget) {
         if (changes.viewTarget.kind === 'questions') focusView(true);
@@ -2219,6 +2241,7 @@
     let layoutNodes = [];
     function measureAndLayout() {
       if (!currentSession) return;
+      finishMotion();
       const sizes = [];
       for (const record of nodeRecords.values()) if (record.kind === 'report' && nodeRecords.has(record.parsedTarget.questionId)) applyNodeSize(record);
       for (const record of nodeRecords.values()) {
@@ -2260,6 +2283,7 @@
       labels.forEach((label, index) => { label.style.fontSize = ''; label.style.setProperty('--far-max', low[index] + 'px'); });
     }
     function applyOffsets() {
+      finishMotion();
       if (!graph) return;
       graph = GrillLayout.layout({ nodes: layoutNodes, flow, constants: LAYOUT, manualOffsets });
       for (const record of nodeRecords.values()) {
@@ -2271,6 +2295,47 @@
         }
       }
     }
+    // The layout stays final; cards and cables share only a display offset.
+    let motionFrame = null;
+    const displayOffsets = new Map();
+    function finishMotion() {
+      if (motionFrame !== null) cancelAnimationFrame(motionFrame);
+      motionFrame = null;
+      if (!displayOffsets.size) return;
+      for (const id of displayOffsets.keys()) {
+        const record = nodeRecords.get(id);
+        if (record) { record.element.style.transform = ''; record.element.style.opacity = ''; }
+      }
+      displayOffsets.clear(); drawLines();
+    }
+    function startMotion(plan) {
+      if (reducedMotion() || (!plan.entering.length && !plan.moving.length)) return;
+      for (const item of plan.moving) displayOffsets.set(item.id, { ...item, delay: 0, entering: false });
+      for (const item of plan.entering) displayOffsets.set(item.id, { ...item, dx: 0, dy: 12, entering: true });
+      let started = null;
+      function paint(elapsed) {
+        let running = false;
+        for (const [id, offset] of displayOffsets) {
+          const progress = Math.max(0, Math.min(1, (elapsed - offset.delay) / 320));
+          const eased = 1 - Math.pow(1 - progress, 3);
+          offset.x = offset.dx * (1 - eased); offset.y = offset.dy * (1 - eased);
+          offset.opacity = offset.entering ? eased : 1;
+          const node = nodeRecords.get(id).element;
+          node.style.transform = 'translate(' + offset.x + 'px, ' + offset.y + 'px)';
+          if (offset.entering) node.style.opacity = String(offset.opacity);
+          if (progress < 1) running = true;
+        }
+        drawLines(); return running;
+      }
+      function step(time) {
+        if (started === null) started = time;
+        if (reducedMotion() || !paint(time - started)) { finishMotion(); return; }
+        motionFrame = requestAnimationFrame(step);
+      }
+      paint(0); motionFrame = requestAnimationFrame(step);
+    }
+    canvas.addEventListener('pointerdown', finishMotion, true);
+    canvas.addEventListener('wheel', finishMotion, { capture: true, passive: true });
     function placeNode(record) { record.element.style.left = record.x + 'px'; record.element.style.top = record.y + 'px'; }
     function selectQuestion(id) {
       selectedQuestion = id;
@@ -2294,8 +2359,9 @@
       function endpoint(record, edge) {
         const dx = edge === 'left' ? -1 : edge === 'right' ? 1 : 0;
         const dy = edge === 'top' ? -1 : edge === 'bottom' ? 1 : 0;
-        return { record, edge, dx, dy, x: record.x + (dx + 1) * record.width / 2,
-          y: record.y + (dy + 1) * record.height / 2 };
+        const offset = displayOffsets.get(record.id);
+        return { record, edge, dx, dy, x: record.x + (offset ? offset.x : 0) + (dx + 1) * record.width / 2,
+          y: record.y + (offset ? offset.y : 0) + (dy + 1) * record.height / 2 };
       }
       let treeOut = 'bottom', treeIn = 'top', sketchOut = 'top', sketchIn = 'bottom', referenceIn = 'left';
       if (flow === 'lr') { treeOut = 'right'; treeIn = 'left'; sketchOut = 'left'; sketchIn = 'right'; referenceIn = 'top'; }
@@ -2328,6 +2394,8 @@
         path.style.strokeWidth = String(highlight ? 4 : width);
         if (dashed) path.setAttribute('stroke-dasharray', secondary ? '5 5' : '8 6');
         if (highlight) path.style.opacity = '1';
+        const entering = [start.record, end.record].filter(Boolean).map(record => displayOffsets.get(record.id)).filter(offset => offset && offset.entering);
+        if (entering.length) path.style.opacity = String((highlight || secondary ? 1 : .8) * Math.min(...entering.map(offset => offset.opacity)));
         path.dataset.from = start.record.id; path.dataset.fromEdge = start.edge;
         if (end.record) { path.dataset.to = end.record.id; path.dataset.toEdge = end.edge; }
         (highlight ? emphasized : paths).push(path);
@@ -2398,6 +2466,8 @@
         const dot = document.createElementNS(svgNamespace, 'circle');
         dot.setAttribute('cx', String(point.x)); dot.setAttribute('cy', String(point.y)); dot.setAttribute('r', String(size / 2 - 1));
         dot.style.fill = 'var(--' + color + ')'; dot.dataset.node = point.record.id; dot.dataset.edge = point.edge;
+        const offset = displayOffsets.get(point.record.id);
+        if (offset && offset.entering) dot.style.opacity = String(offset.opacity);
         dots.push(dot);
       }
       connectorLayer.replaceChildren(...paths, ...emphasized); socketLayer.replaceChildren(...dots);
