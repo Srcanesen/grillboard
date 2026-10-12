@@ -11,7 +11,7 @@ const sketch = (rev = 1, extra = {}) => ({ id: 'k1', src: 'sketch/home.html', re
 const model = (raw = {}, user = {}) => session.model(raw, user);
 function expect(actual, expected = {}) {
   assert.deepEqual(actual, {
-    highlights: {}, collapsedQuestions: [], changedResearch: [], viewTarget: null,
+    highlights: {}, collapsedQuestions: [], newQuestions: [], changedResearch: [], viewTarget: null,
     ...expected,
   });
 }
@@ -20,7 +20,7 @@ const idle = { idle: true };
 test('waiting to asking highlights the question and focuses all asking questions in file order', () => {
   expect(changes.between(model({ questions: [question('waiting'), question('asking', { id: 'q2' })] }),
     model({ questions: [question('asking'), question('asking', { id: 'q2' })] }), idle), {
-    highlights: { q1: ['question-status'] }, viewTarget: { kind: 'questions', nodeIds: ['q1', 'q2'] },
+    newQuestions: ['q1'], highlights: { q1: ['question-status'] }, viewTarget: { kind: 'questions', nodeIds: ['q1', 'q2'] },
   });
 });
 
@@ -32,8 +32,17 @@ test('settling an expanded asking question requests collapse and no view move', 
 
 test('reopening a settled question highlights and focuses without collapsing', () => {
   expect(changes.between(model({ questions: [question('settled')] }), model({ questions: [question('asking', { reopened: true })] }), idle), {
-    highlights: { q1: ['question-status'] }, viewTarget: { kind: 'questions', nodeIds: ['q1'] },
+    newQuestions: ['q1'], highlights: { q1: ['question-status'] }, viewTarget: { kind: 'questions', nodeIds: ['q1'] },
   });
+});
+
+test('questions that start to be asked are listed as new, in file order, and only once', () => {
+  const previous = model({ questions: [question('waiting'), question('settled', { id: 'q2' }), question('asking', { id: 'q3' })] });
+  const current = model({ questions: [question('asking'), question('asking', { id: 'q2', reopened: true }), question('asking', { id: 'q3' }),
+    question('asking', { id: 'q4' }), question('waiting', { id: 'q5' })] });
+  assert.deepEqual(changes.between(previous, current, { idle: false }).newQuestions, ['q1', 'q2', 'q4']);
+  assert.deepEqual(changes.between(current, current, { idle: false }).newQuestions, []);
+  assert.deepEqual(changes.between(null, current, { idle: false }).newQuestions, []);
 });
 
 test('reopened metadata alone does not cause a change', () => {
@@ -87,7 +96,7 @@ test('a higher sketch revision highlights and takes the view when nothing else i
 test('new asking questions win over a revised sketch', () => {
   expect(changes.between(model({ questions: [question('waiting')], sketches: [sketch()] }),
     model({ questions: [question('asking')], sketches: [sketch(2)] }), idle), {
-    highlights: { q1: ['question-status'], 'sketch:k1': ['sketch-revised'] }, viewTarget: { kind: 'questions', nodeIds: ['q1'] },
+    newQuestions: ['q1'], highlights: { q1: ['question-status'], 'sketch:k1': ['sketch-revised'] }, viewTarget: { kind: 'questions', nodeIds: ['q1'] },
   });
 });
 
@@ -99,7 +108,7 @@ test('same or lower revisions and changed sketch sources do not highlight', () =
 test('new sketches win over new reports and asking questions, preserving sketch order', () => {
   expect(changes.between(model({ questions: [question('waiting')] }), model({ questions: [question('asking')],
     sketches: [sketch(1, { id: 'k2' }), sketch()], research: [note('done', { report: 'research/s1.md' })] }), idle), {
-    highlights: { q1: ['question-status'], 'sketch:k2': ['sketch-added'], 'sketch:k1': ['sketch-added'], 'report:s1': ['report-added'] },
+    newQuestions: ['q1'], highlights: { q1: ['question-status'], 'sketch:k2': ['sketch-added'], 'sketch:k1': ['sketch-added'], 'report:s1': ['report-added'] },
     changedResearch: ['s1'],
     viewTarget: { kind: 'sketches', nodeIds: ['@idea', 'sketch:k2', 'sketch:k1'] },
   });
@@ -108,7 +117,7 @@ test('new sketches win over new reports and asking questions, preserving sketch 
 test('the first new report wins over asking questions and later reports', () => {
   expect(changes.between(model({ questions: [question('waiting')] }), model({ questions: [question('asking')],
     research: [note('done', { id: 's2', report: 'research/s2.md' }), note('done', { report: 'research/s1.md' })] }), idle), {
-    highlights: { q1: ['question-status'], 'report:s2': ['report-added'], 'report:s1': ['report-added'] },
+    newQuestions: ['q1'], highlights: { q1: ['question-status'], 'report:s2': ['report-added'], 'report:s1': ['report-added'] },
     changedResearch: ['s2', 's1'],
     viewTarget: { kind: 'report', nodeIds: ['q1', 'report:s2'] },
   });
@@ -143,7 +152,7 @@ test('waiting option pictures remain standalone and highlight their reference no
 test('a reference that becomes an option picture when its question is asked is not new', () => {
   const user = { refs: [{ id: 'u1', kind: 'image', src: 'ref.png', target: 'q1:a' }] };
   expect(changes.between(model({ questions: [question('waiting')] }, user), model({ questions: [question('asking')] }, user), idle), {
-    highlights: { q1: ['question-status'] }, viewTarget: { kind: 'questions', nodeIds: ['q1'] },
+    newQuestions: ['q1'], highlights: { q1: ['question-status'] }, viewTarget: { kind: 'questions', nodeIds: ['q1'] },
   });
 });
 
@@ -162,9 +171,9 @@ test('two identical models cause no highlights, collapses or view move', () => {
 
 test('idle gates only the view move for the same asking transition', () => {
   const previous = model({ questions: [question('waiting')] }), current = model({ questions: [question('asking')] });
-  expect(changes.between(previous, current, { idle: false }), { highlights: { q1: ['question-status'] } });
+  expect(changes.between(previous, current, { idle: false }), { newQuestions: ['q1'], highlights: { q1: ['question-status'] } });
   expect(changes.between(previous, current, idle), {
-    highlights: { q1: ['question-status'] }, viewTarget: { kind: 'questions', nodeIds: ['q1'] },
+    newQuestions: ['q1'], highlights: { q1: ['question-status'] }, viewTarget: { kind: 'questions', nodeIds: ['q1'] },
   });
 });
 
@@ -202,7 +211,7 @@ test('canonical ids are read from model fields and inputs stay unchanged', () =>
 
 test('omitting context does not infer idleness', () => {
   expect(changes.between(model({ questions: [question('waiting')] }), model({ questions: [question('asking')] })), {
-    highlights: { q1: ['question-status'] },
+    newQuestions: ['q1'], highlights: { q1: ['question-status'] },
   });
   expect(changes.between(null, model()));
 });
@@ -210,7 +219,7 @@ test('omitting context does not infer idleness', () => {
 test('changes retain every highlight reason when an option picture and a status arrive together', () => {
   expect(changes.between(model({ questions: [question('waiting')] }), model({ questions: [question('asking')] },
     { refs: [{ id: 'u1', kind: 'image', src: 'ref.png', target: 'q1:a' }] }), idle), {
-    highlights: { q1: ['question-status', 'reference-added'] },
+    newQuestions: ['q1'], highlights: { q1: ['question-status', 'reference-added'] },
     viewTarget: { kind: 'questions', nodeIds: ['q1'] },
   });
 });

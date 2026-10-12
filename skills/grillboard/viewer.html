@@ -72,6 +72,11 @@
     .question-card { flex: 1 1 240px; width: 280px; min-width: 0; max-width: 320px; }
     .question-card.asking { border: 2px solid var(--accent); box-shadow: var(--shadow); }
     .question-card.waiting { border-style: dashed; color: var(--muted); }
+    .question-card.unseen { animation: unseen-pulse 1.8s ease-in-out infinite; }
+    .question-card.unseen.highlight { animation: card-highlight 1.2s ease-out, unseen-pulse 1.8s ease-in-out 1.2s infinite; }
+    .question-card.unseen::after { content: attr(data-new-label); position: absolute; top: -11px; right: 12px; padding: 1px 8px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 700; line-height: 1.6; pointer-events: none; }
+    @keyframes unseen-pulse { 0%, 100% { box-shadow: var(--shadow), 0 0 0 0 transparent; } 50% { box-shadow: var(--shadow), 0 0 0 7px color-mix(in srgb, var(--accent) 40%, transparent); } }
+    @media (prefers-reduced-motion: reduce) { .question-card.unseen, .question-card.unseen.highlight { animation: none; box-shadow: var(--shadow), 0 0 0 4px color-mix(in srgb, var(--accent) 40%, transparent); } }
     .card-top { display: flex; align-items: flex-start; gap: 6px; }
     .badges { display: flex; flex-wrap: wrap; gap: 5px; }
     .badge { display: inline-block; padding: 2px 7px; border-radius: var(--radius-small); font-size: 11px; line-height: 1.5; color: var(--muted); background: var(--panel); }
@@ -812,8 +817,9 @@
   </script>
   <!-- The changes block compares two session models: what is new, what to highlight, where to look. -->
   <script id="grill-changes">
-    // between(previous, current, context = {}) -> { highlights: { [nodeId]: reason[] }, collapsedQuestions: questionId[], changedResearch: noteId[], viewTarget: { kind: 'sketches' | 'report' | 'questions', nodeIds: nodeId[] } | null }.
+    // between(previous, current, context = {}) -> { highlights: { [nodeId]: reason[] }, collapsedQuestions: questionId[], newQuestions: questionId[], changedResearch: noteId[], viewTarget: { kind: 'sketches' | 'report' | 'questions', nodeIds: nodeId[] } | null }.
     // previous and current are GrillSession models; previous is null on the first render, which highlights nothing and never moves the view.
+    // newQuestions are the questions that are asking now and were not asking before; the page marks them until the user touches them.
     // reasons: question-status, research-status, sketch-added, sketch-revised, report-added, reference-added. A new reference on an option highlights its question.
     // context: { idle: boolean }. The view moves only when idle, to the first of: new sketches, the first new report, the asking questions when one is new, revised sketches. Inputs are never mutated.
     const GrillChanges = (() => {
@@ -874,7 +880,7 @@
           } else if (newAsking.length) viewTarget = { kind: 'questions', nodeIds: current.questionsByStatus.asking.map(q => q.id) };
           else if (revisedSketches.length) viewTarget = { kind: 'sketches', nodeIds: [current.ideaNodeId].concat(revisedSketches) };
         }
-        return { highlights, collapsedQuestions, changedResearch, viewTarget };
+        return { highlights, collapsedQuestions, newQuestions: newAsking, changedResearch, viewTarget };
       }
       return { between };
     })();
@@ -888,7 +894,7 @@
         researching: 'Researching', waiting: 'Waiting', reopened: 'Reopened',
         ownAnswer: 'My own answer or a note', acceptRecommendation: 'Accept the recommendation',
         roundAnswered: '{done} of {total} answered', pickRecommendations: 'Pick the recommendations',
-        sendAnswers: 'Send answers', sent: 'Sent', answersSent: 'Answers sent. The next round is on its way…',
+        sendAnswers: 'Send answers', sent: 'Sent', newQuestion: 'New', answersSent: 'Answers sent. The next round is on its way…',
         remainingAnswers: '{count} unanswered', answerFailed: 'Could not send answers. Try again.', viewVariant: 'View larger',
         recommended: 'Recommended', answer: 'Answer', waitingOn: 'Waiting on',
         researchingHint: 'The agent is looking this up.', spec: 'Spec',
@@ -915,7 +921,7 @@
         researching: 'Araştırılıyor', waiting: 'Bekliyor', reopened: 'Yeniden açıldı',
         ownAnswer: 'Kendi cevabım ya da notum', acceptRecommendation: 'Öneriyi kabul et',
         roundAnswered: 'Cevaplanan: {done} / {total}', pickRecommendations: 'Önerileri seç',
-        sendAnswers: 'Cevapları gönder', sent: 'Gönderildi', answersSent: 'Cevaplar gönderildi. Sıradaki tur hazırlanıyor…',
+        sendAnswers: 'Cevapları gönder', sent: 'Gönderildi', newQuestion: 'Yeni', answersSent: 'Cevaplar gönderildi. Sıradaki tur hazırlanıyor…',
         remainingAnswers: '{count} soru cevapsız', answerFailed: 'Cevaplar gönderilemedi. Tekrar deneyin.', viewVariant: 'Büyüt',
         recommended: 'Öneri', answer: 'Cevap', waitingOn: 'Şunu bekliyor',
         researchingHint: 'Ajan bu konuyu araştırıyor.', spec: 'Spec',
@@ -1300,6 +1306,12 @@
     let hoveredQuestion = '';
     let connection = null;
     const expandedCards = new Set();
+    // New questions stay marked until the user touches or answers them: the entry effect alone is easy to miss.
+    const unseenQuestions = new Set();
+    function markSeen(id) {
+      if (!unseenQuestions.delete(id)) return;
+      const card = cardNodes.get(id); if (card) card.classList.remove('unseen');
+    }
     const openResearchPanels = new Set();
     const pendingDropPositions = new Map();
     let serverMode = false;
@@ -1346,6 +1358,7 @@
       for (const q of currentSession.questionsByStatus.asking) {
         const card = cardNodes.get(q.id); if (!card) continue;
         const answer = q.pendingItem || draftFor(q.id);
+        if (GrillSession.hasAnswer(answer)) markSeen(q.id);
         const rows = [...card.querySelectorAll('[data-answer-option]')];
         for (const row of rows) {
           const picked = row.dataset.answerOption === answer.option;
@@ -1947,6 +1960,8 @@
       currentLabels = sessionLabels(currentSession);
       const asking = new Set(currentSession.questionsByStatus.asking.map(q => q.id));
       for (const id of answerDrafts.keys()) if (!asking.has(id)) answerDrafts.delete(id);
+      for (const id of changes.newQuestions) unseenQuestions.add(id);
+      for (const id of unseenQuestions) if (!asking.has(id) || currentSession.questionsById[id].pending) unseenQuestions.delete(id);
       variantObserver.disconnect();
       const data = currentSession;
       const labels = currentLabels;
@@ -2012,6 +2027,7 @@
           if (!q.pending && badge) badge.remove();
           const accept = card.querySelector('.accept-recommendation'); if (accept) accept.hidden = q.pending;
         }
+        card.classList.toggle('unseen', unseenQuestions.has(q.id)); card.dataset.newLabel = labels.newQuestion;
         registerNode(q.id, card, { kind: 'question', validDependencies: q.validDependencies });
         cardNodes.set(q.id, card);
       }
@@ -2335,6 +2351,10 @@
       paint(0); motionFrame = requestAnimationFrame(step);
     }
     canvas.addEventListener('pointerdown', finishMotion, true);
+    for (const type of ['pointerdown', 'focusin']) world.addEventListener(type, event => {
+      const card = event.target.closest && event.target.closest('.question-card.unseen');
+      if (card) markSeen(card.dataset.questionId);
+    }, true);
     canvas.addEventListener('wheel', finishMotion, { capture: true, passive: true });
     function placeNode(record) { record.element.style.left = record.x + 'px'; record.element.style.top = record.y + 'px'; }
     function selectQuestion(id) {
