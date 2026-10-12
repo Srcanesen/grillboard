@@ -290,8 +290,9 @@
     .connector-handle { position: absolute; top: calc(50% - 5px); left: -6px; width: 10px; height: 10px; padding: 0; border: 2px solid var(--card); border-radius: 50%; background: var(--socket-color, var(--line)); cursor: crosshair; z-index: 6; }
     /* Left-to-right references receive their cable through the top edge. */
     :root[data-flow="lr"] .connector-handle { top: -6px; left: calc(50% - 5px); }
-    .disconnect-ref { position: absolute; top: 28px; left: 4px; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--card); padding: 2px 6px; opacity: 0; z-index: 2; }
-    .reference-card:hover .disconnect-ref, .reference-card:focus-within .disconnect-ref, .option:hover .disconnect-ref, .option:focus-within .disconnect-ref { opacity: 1; }
+    /* Always shown and named in words: a control that appears only on hover is easy to miss. */
+    .disconnect-ref { display: block; margin-top: 7px; min-height: 24px; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--card); padding: 2px 8px; font-size: 12px; }
+    .tiles .disconnect-ref { margin: 0 7px; }
     @media (prefers-reduced-motion: reduce) { .research-chip.highlight { animation: none; } }
     .reference-picture { border: 0; padding: 0; width: 100%; background: var(--panel); border-radius: var(--radius-small); cursor: zoom-in; display: block; }
     .reference-picture img { display: block; width: 100%; height: 160px; object-fit: contain; }
@@ -1763,7 +1764,7 @@
       const note = button(ref.note || currentLabels.addNote, currentLabels.addNote, () => editNote(note, ref), 'ref-note' + (ref.note ? '' : ' placeholder'));
       card.append(remove, note);
       if ((ref.anchorId === ideaId && ref.parsedTarget.questionId === 'idea') || (currentSession && Object.prototype.hasOwnProperty.call(currentSession.questionsById, ref.parsedTarget.questionId))) {
-        card.append(button('−', currentLabels.disconnect, async () => {
+        card.append(button(currentLabels.disconnect, currentLabels.disconnect, async () => {
           try { await updateReferenceTarget(ref, ''); }
           catch (error) { toast(currentLabels.refFailed + ': ' + error.message); }
         }, 'disconnect-ref'));
@@ -2657,7 +2658,7 @@
         const node = event.target.closest('.node'); const record = node && nodeRecords.get(node.dataset.nodeId);
         if (!serverMode || !record || !record.ref || !record.ref.user) return;
         event.preventDefault(); cancelGlide(); recordInteraction(); canvas.setPointerCapture(event.pointerId);
-        connection = { pointerId: event.pointerId, record, point: worldPoint(event.clientX, event.clientY) };
+        connection = { pointerId: event.pointerId, record, point: worldPoint(event.clientX, event.clientY), startX: event.clientX, startY: event.clientY, moved: false };
         scheduleLines(); return;
       }
       if (event.target.closest('textarea, input, a, .delete-ref, .ref-note, .disconnect-ref, .details-toggle, .research-chip, .node-resize, .variant-open, .accept-recommendation')) return;
@@ -2678,6 +2679,7 @@
     canvas.addEventListener('pointermove', event => {
       if (connection && connection.pointerId === event.pointerId) {
         connection.point = worldPoint(event.clientX, event.clientY);
+        if (Math.hypot(event.clientX - connection.startX, event.clientY - connection.startY) > 6) connection.moved = true;
         setDropTarget(connectionTargetAt(event.clientX, event.clientY)); scheduleLines(); return;
       }
       if (!pointers.has(event.pointerId)) return;
@@ -2717,7 +2719,9 @@
         const target = canceled ? '' : connectionTargetAt(event.clientX, event.clientY);
         if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
         suppressClickUntil = Date.now() + 500; clearDropTarget(); scheduleLines();
-        if (target) {
+        // Pulling the cable out and dropping it on the empty board disconnects; a plain click on the handle does not.
+        const pulledOut = !canceled && !target && ended.moved && ended.record.ref.target && !offBoard(event.clientX, event.clientY);
+        if (target || pulledOut) {
           try { await updateReferenceTarget(ended.record.ref, target); }
           catch (error) { toast(currentLabels.refFailed + ': ' + error.message); }
         }
@@ -2778,10 +2782,13 @@
       }
     }, { passive: false });
     // Hit testing uses shown coordinates even while pointer capture hides the drop target.
-    function cardTargetAt(x, y, includeIdea, excludeId) {
-      if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return '';
+    function offBoard(x, y) {
+      if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return true;
       const top = document.elementFromPoint(x, y);
-      if (top && top.closest('#spec-panel, #toolbar, #round-bar, #lightbox, #reader')) return '';
+      return Boolean(top && top.closest('#spec-panel, #toolbar, #round-bar, #lightbox, #reader'));
+    }
+    function cardTargetAt(x, y, includeIdea, excludeId) {
+      if (offBoard(x, y)) return '';
       const point = worldPoint(x, y);
       const ids = [...cardNodes.keys()].reverse(); if (includeIdea) ids.push(ideaId);
       for (const id of ids) {
