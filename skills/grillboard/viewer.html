@@ -378,7 +378,7 @@
   <div id="drop-hint" class="drop-hint floating" role="status" hidden></div>
   <div id="lightbox" class="lightbox" role="dialog" aria-modal="true" hidden></div>
   <div id="reader" class="lightbox" role="dialog" aria-modal="true" hidden></div>
-  <!-- Pure logic lives in the two blocks below: no document, no window, no state shared with the page.
+  <!-- Pure logic lives in the blocks below: no document, no window, no state shared with the page.
        Each block defines one global. Tests load a block by its id: `node --test tests/board/*.test.mjs`. -->
   <script id="grill-session">
     // model(rawSession, rawUser, options = {}) -> normalized lang, title, idea, answered, status, labels, refs, sketches, architecture, research, questions;
@@ -613,6 +613,16 @@
       }
       return { fit, focus, isFar: z => z < .5 };
     })();
+  </script>
+  <!-- The layout block knows node kinds and sizes, not the page: sizes in, positions out. -->
+  <script id="grill-layout">
+    // GrillLayout: where every node of the board sits.
+    const GrillLayout = {};
+  </script>
+  <!-- The changes block compares two session models: what is new, what to highlight, where to look. -->
+  <script id="grill-changes">
+    // GrillChanges: what changed between the last render and this one.
+    const GrillChanges = {};
   </script>
   <script>
     // UI labels, including Markdown headings.
