@@ -1,6 +1,6 @@
 ---
-name: visual-grilling
-description: Grill the user about a plan, decision, or idea while a live board in their browser draws the design tree, the references and the spec as it settles. Use when the user asks for a visual grill, or wants to see the decisions while being grilled.
+name: grillboard
+description: Grill the user about a plan, decision, or idea while a live board in their browser draws the design tree, the references and the spec as it settles. Use when the user asks for GrillBoard or a visual grill, or wants to see the decisions while being grilled.
 ---
 
 <!-- "The interview" is adapted from the grilling skill in mattpocock/skills (MIT). See CREDITS.md. -->

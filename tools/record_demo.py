@@ -156,7 +156,7 @@ def action(page, item, recording, session, answered):
     elif item["type"] == "fill":
         page.locator(f'[data-answer-question="{item["question"]}"]').fill(item["text"])
     elif item["type"] == "send":
-        command = [sys.executable, str(ROOT / "skills/visual-grilling/server.py"),
+        command = [sys.executable, str(ROOT / "skills/grillboard/server.py"),
                    str(session), "--wait-answers"]
         if answered:
             command.extend(["--after", answered])
@@ -197,11 +197,11 @@ def main():
         raise SystemExit("Cannot record demo: ffmpeg was not found on PATH.")
     (ROOT / "docs").mkdir(exist_ok=True)
     server = None
-    with tempfile.TemporaryDirectory(prefix="visual-grilling-demo-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="grillboard-demo-") as temporary:
         work = Path(temporary)
         session = work / "session"
         shutil.copytree(ROOT / "examples/demo", session)
-        shutil.copyfile(ROOT / "skills/visual-grilling/viewer.html", session / "index.html")
+        shutil.copyfile(ROOT / "skills/grillboard/viewer.html", session / "index.html")
         final = read_assignment(session / "session.js")
         applied, answered = {}, ""
         initial = session_for(final, STAGES[0], None, applied, answered)
@@ -210,7 +210,7 @@ def main():
         (session / "research/s1.log").write_text("")
         try:
             server = subprocess.Popen(
-                [sys.executable, str(ROOT / "skills/visual-grilling/server.py"),
+                [sys.executable, str(ROOT / "skills/grillboard/server.py"),
                  str(session), "--serve"], stdout=subprocess.PIPE, text=True)
             deadline = time.monotonic() + 10
             while not (session / "server.json").exists():

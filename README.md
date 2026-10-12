@@ -1,4 +1,4 @@
-# visual-grilling
+# GrillBoard
 
 An agent skill that interviews you about an idea in rounds you can answer by clicking on a live browser board, with a live sketch per option for look-and-layout questions alongside the decisions, references, research and spec.
 
@@ -29,33 +29,33 @@ From the root of this checkout, copy the skill for every Claude Code project:
 
 ```sh
 mkdir -p ~/.claude/skills
-cp -R skills/visual-grilling ~/.claude/skills/
+cp -R skills/grillboard ~/.claude/skills/
 ```
 
 Or symlink it so changes in this checkout are picked up:
 
 ```sh
 mkdir -p ~/.claude/skills
-ln -s "$PWD/skills/visual-grilling" ~/.claude/skills/visual-grilling
+ln -s "$PWD/skills/grillboard" ~/.claude/skills/grillboard
 ```
 
 For just one project, run either alternative from that project's root, replacing the source path with this checkout's absolute path:
 
 ```sh
 mkdir -p .claude/skills
-cp -R /absolute/path/to/visual-grilling/skills/visual-grilling .claude/skills/
+cp -R /absolute/path/to/grillboard/skills/grillboard .claude/skills/
 ```
 
 ```sh
 mkdir -p .claude/skills
-ln -s /absolute/path/to/visual-grilling/skills/visual-grilling .claude/skills/visual-grilling
+ln -s /absolute/path/to/grillboard/skills/grillboard .claude/skills/grillboard
 ```
 
 Choose one installation method per destination. Symlink commands expect that destination not to exist yet.
 
 ## Use
 
-1. In your agent, type: `visual grill me about a small app where my family keeps and shares recipes`.
+1. In your agent, type: `use grillboard to grill me about a small app where my family keeps and shares recipes`.
 2. The agent creates `.grill/<topic>/`, copies the board there, writes the idea and starts the local server. It opens or gives you the board URL.
 3. Answer on the board by clicking options and pressing "Send answers", or type your answers in chat. The board shows your settled decisions and the next round.
 4. Look at the sketches and research as they appear. Paste or drop pictures and links onto the board to inform the next round.
@@ -66,10 +66,10 @@ Choose one installation method per destination. Symlink commands expect that des
 Run these commands from the checkout root in a macOS terminal. They work on a temporary copy and leave `examples/demo` untouched:
 
 ```sh
-demo_dir="$(mktemp -d "${TMPDIR:-/tmp}/visual-grilling.XXXXXX")"
+demo_dir="$(mktemp -d "${TMPDIR:-/tmp}/grillboard.XXXXXX")"
 cp -R examples/demo/. "$demo_dir/"
-cp skills/visual-grilling/viewer.html "$demo_dir/index.html"
-board_url="$(python3 skills/visual-grilling/server.py "$demo_dir")"
+cp skills/grillboard/viewer.html "$demo_dir/index.html"
+board_url="$(python3 skills/grillboard/server.py "$demo_dir")"
 open "$board_url"
 printf 'Board: %s\nSession copy: %s\n' "$board_url" "$demo_dir"
 ```
