@@ -378,6 +378,17 @@
   <div id="drop-hint" class="drop-hint floating" role="status" hidden></div>
   <div id="lightbox" class="lightbox" role="dialog" aria-modal="true" hidden></div>
   <div id="reader" class="lightbox" role="dialog" aria-modal="true" hidden></div>
+  <!-- Pure logic lives in the two blocks below: no document, no window, no state shared with the page.
+       Each block defines one global. Tests load a block by its id: `node --test tests/board`. -->
+  <script id="grill-session">
+    // GrillSession: turns the raw session and user files into the one model the board reads.
+    const GrillSession = {};
+  </script>
+  <!-- The camera block is separate from the session block: it knows rectangles, not questions. -->
+  <script id="grill-camera">
+    // GrillCamera: where the view should move, computed from plain rectangles.
+    const GrillCamera = {};
+  </script>
   <script>
     // UI labels, including Markdown headings.
     const LABELS = {
