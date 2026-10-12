@@ -112,6 +112,8 @@ The board can load remote reference images and open external links supplied in t
 
 ## Development
 
+Run the tests with `node --test tests/board/*.test.mjs` and `python3 -m unittest discover -s tests/server`. Neither needs a package installed: the board tests load the pure `<script id="grill-session">` and `<script id="grill-camera">` blocks of `viewer.html` in Node, and the server tests start `server.py` in a temporary folder. `GLOSSARY.md` defines the project's words and `docs/adr/` records the decisions behind its shape.
+
 Run `python3 tools/record_demo.py` to rebuild `docs/demo.gif` and `docs/board.png`; it needs Python Playwright, installed Google Chrome and ffmpeg on `PATH`. Edit the `STAGES` list to change the replay; it uses a temporary sample copy and illustrative closing answers, then stops its server and removes the copy.
 
 ## Credits and license

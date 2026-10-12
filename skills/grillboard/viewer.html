@@ -379,7 +379,7 @@
   <div id="lightbox" class="lightbox" role="dialog" aria-modal="true" hidden></div>
   <div id="reader" class="lightbox" role="dialog" aria-modal="true" hidden></div>
   <!-- Pure logic lives in the two blocks below: no document, no window, no state shared with the page.
-       Each block defines one global. Tests load a block by its id: `node --test tests/board`. -->
+       Each block defines one global. Tests load a block by its id: `node --test tests/board/*.test.mjs`. -->
   <script id="grill-session">
     // model(rawSession, rawUser, options = {}) -> normalized session fields plus userRefs, questionsByStatus, questionsById, openQuestions, researchByStatus, unfinishedResearch, pendingCount; questions have pending (boolean)/pendingItem (batch item or null), refs/research have parsedTarget; groups preserve file order, lookup is an object; serverMode: false disables pending.
     // parseTarget(target) -> { questionId, optionId }, each '' when absent; 'idea' remains questionId 'idea'.
@@ -2282,7 +2282,7 @@
     function recordInteraction() { lastInteraction = Date.now(); }
     function focusView(animate, only) {
       if (!graph) return;
-      let ids = only || currentSession.questions.filter(q => q.status === 'asking').map(q => q.id);
+      let ids = only || currentSession.questionsByStatus.asking.map(q => q.id);
       if (!ids.length) ids = [ideaId].concat((graph.levels[1] || []).map(node => node.id));
       const records = [];
       for (const id of ids) {
