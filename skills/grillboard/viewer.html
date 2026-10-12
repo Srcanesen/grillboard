@@ -295,7 +295,7 @@
     .lightbox button { position: absolute; right: 16px; top: 16px; color: white; background: transparent; border: 1px solid white; border-radius: var(--radius-small); padding: 6px 12px; }
     .node.highlight { animation: card-highlight 1.2s ease-out; }
     /* Far labels change paint only; normal content continues to reserve its space. */
-    .far-label { display: none; position: absolute; inset: 0; padding: calc(8px / var(--z, 1)); overflow: hidden; pointer-events: none; font-size: min(calc(12px / var(--z, 1)), 36px); font-weight: 600; line-height: 1.25; }
+    .far-label { display: none; position: absolute; inset: 0; padding: 16px; overflow: hidden; overflow-wrap: anywhere; pointer-events: none; font-size: min(calc(12px / var(--z, 1)), var(--far-max, 36px)); font-weight: 600; line-height: 1.25; }
     #world.far .question-card > :not(.far-label):not(.node-resize),
     #world.far .idea-card > :not(.far-label):not(.node-resize) { visibility: hidden; }
     #world.far .question-card > .far-label, #world.far .idea-card > .far-label { display: block; }
@@ -549,7 +549,7 @@
   </script>
   <!-- The camera block is separate from the session block: it knows rectangles, not questions. -->
   <script id="grill-camera">
-    // fit(boxes, screen) -> { x, y, z }, fitting nonempty board rectangles at zoom .2 to 1.
+    // fit(boxes, screen) -> { x, y, z }, fitting nonempty board rectangles at zoom .1 to 1.
     // focus(boxes, screen, { minimum }) -> { x, y, z }, keeping a fitting prefix at minimum .7 or .4.
     // isFar(z) -> boolean, whether the view uses the far presentation.
     // boxes: { x, y, width, height }[]; screen: { width, height, boardHidden,
@@ -591,7 +591,7 @@
         const top = Math.min(...boxes.map(node => node.y)) - 28;
         const bottom = Math.max(...boxes.map(node => node.y + node.height));
         return avoidControls(screen, area => {
-          const z = Math.max(.2, Math.min(1, (area.width - 80) / Math.max(1, right - left), (area.height - 80) / Math.max(1, bottom - top)));
+          const z = Math.max(.1, Math.min(1, (area.width - 80) / Math.max(1, right - left), (area.height - 80) / Math.max(1, bottom - top)));
           const end = { x: area.x + area.width / 2 - (left + right) / 2 * z, y: area.y + area.height / 2 - (top + bottom) / 2 * z, z };
           return { kept: boxes, end };
         });
@@ -794,19 +794,21 @@
   </script>
   <!-- The changes block compares two session models: what is new, what to highlight, where to look. -->
   <script id="grill-changes">
-    // between(previous, current, context = {}) -> { highlights: { [nodeId]: reason[] }, collapsedQuestions: questionId[], research: { [noteId]: { previousStatus: string | null, changed: boolean } }, consumedReferenceIds: nodeId[], viewTarget: { kind: 'sketches' | 'report' | 'questions', nodeIds: nodeId[] } | null }.
-    // Models are GrillSession models with ideaNodeId, sketches[].nodeId, research[].nodeId/reportNodeId, and usable boardSketches/boardReports; question ids already are node ids; previous is null on the first render.
-    // context: { addedReferenceIds: iterable of node ids, idle: boolean }; reasons: question-status, research-status, sketch-added, sketch-revised, report-added, user-reference; inputs are never mutated.
+    // between(previous, current, context = {}) -> { highlights: { [nodeId]: reason[] }, collapsedQuestions: questionId[], changedResearch: noteId[], viewTarget: { kind: 'sketches' | 'report' | 'questions', nodeIds: nodeId[] } | null }.
+    // previous and current are GrillSession models; previous is null on the first render, which highlights nothing and never moves the view.
+    // reasons: question-status, research-status, sketch-added, sketch-revised, report-added, reference-added. A new reference on an option highlights its question.
+    // context: { idle: boolean }. The view moves only when idle, to the first of: new sketches, the first new report, the asking questions when one is new, revised sketches. Inputs are never mutated.
     const GrillChanges = (() => {
       function between(previous, current, context = {}) {
-        const highlights = {}, collapsedQuestions = [], research = {}, consumedReferenceIds = [];
+        const highlights = {}, collapsedQuestions = [], changedResearch = [];
         const firstRender = previous === null;
         const previousQuestions = new Map();
         for (const q of previous ? previous.questions : []) if (!previousQuestions.has(q.id)) previousQuestions.set(q.id, q.status);
         const previousResearch = new Map((previous ? previous.research : []).map(note => [note.id, note.status]));
         const previousSketches = new Map((previous ? previous.boardSketches : []).map(sketch => [sketch.id, sketch.rev]));
         const previousReports = new Set((previous ? previous.boardReports : []).map(note => note.id));
-        const newAsking = [], newSketches = [], newReports = [];
+        const previousRefs = new Set((previous ? previous.boardRefs.concat(previous.optionPictures) : []).map(ref => ref.nodeId));
+        const newAsking = [], newSketches = [], revisedSketches = [], newReports = [];
         function highlight(id, reason) {
           if (!Object.prototype.hasOwnProperty.call(highlights, id)) Object.defineProperty(highlights, id, { value: [], enumerable: true });
           if (!highlights[id].includes(reason)) highlights[id].push(reason);
@@ -823,30 +825,27 @@
           }
         }
         for (const note of current.research) {
-          Object.defineProperty(research, note.id, { value: {
-            previousStatus: previousResearch.get(note.id) ?? null,
-            changed: previousResearch.get(note.id) !== note.status
-          }, enumerable: true, configurable: true });
+          if (!firstRender && previousResearch.get(note.id) !== note.status && !changedResearch.includes(note.id)) changedResearch.push(note.id);
         }
-        for (const note of current.boardResearch) if (research[note.id].changed) highlight(note.nodeId, 'research-status');
+        for (const note of current.boardResearch) if (changedResearch.includes(note.id)) highlight(note.nodeId, 'research-status');
         for (const sketch of current.boardSketches) {
           if (firstRender) continue;
           if (!previousSketches.has(sketch.id)) {
             highlight(sketch.nodeId, 'sketch-added'); newSketches.push(sketch.nodeId);
-          } else if (sketch.rev > previousSketches.get(sketch.id)) highlight(sketch.nodeId, 'sketch-revised');
+          } else if (sketch.rev > previousSketches.get(sketch.id)) {
+            highlight(sketch.nodeId, 'sketch-revised'); revisedSketches.push(sketch.nodeId);
+          }
         }
         for (const note of current.boardReports) {
           if (!firstRender && !previousReports.has(note.id)) {
             highlight(note.reportNodeId, 'report-added'); newReports.push(note);
           }
         }
-        const addedReferenceIds = new Set(context.addedReferenceIds || []);
-        for (const ref of current.boardRefs) if (addedReferenceIds.has(ref.nodeId)) {
-          highlight(ref.nodeId, 'user-reference'); consumedReferenceIds.push(ref.nodeId);
-        }
-        for (const ref of current.optionPictures) if (addedReferenceIds.has(ref.nodeId)) {
-          if (seenQuestions.has(ref.parsedTarget.questionId)) highlight(ref.parsedTarget.questionId, 'user-reference');
-          consumedReferenceIds.push(ref.nodeId);
+        if (!firstRender) {
+          for (const ref of current.boardRefs) if (!previousRefs.has(ref.nodeId)) highlight(ref.nodeId, 'reference-added');
+          for (const ref of current.optionPictures) {
+            if (!previousRefs.has(ref.nodeId) && seenQuestions.has(ref.parsedTarget.questionId)) highlight(ref.parsedTarget.questionId, 'reference-added');
+          }
         }
         let viewTarget = null;
         if (!firstRender && context.idle) {
@@ -855,8 +854,9 @@
             const note = newReports[0], target = note.parsedTarget.questionId;
             viewTarget = { kind: 'report', nodeIds: [Object.prototype.hasOwnProperty.call(current.questionsById, target) ? target : current.ideaNodeId, note.reportNodeId] };
           } else if (newAsking.length) viewTarget = { kind: 'questions', nodeIds: current.questionsByStatus.asking.map(q => q.id) };
+          else if (revisedSketches.length) viewTarget = { kind: 'sketches', nodeIds: [current.ideaNodeId].concat(revisedSketches) };
         }
-        return { highlights, collapsedQuestions, research, consumedReferenceIds, viewTarget };
+        return { highlights, collapsedQuestions, changedResearch, viewTarget };
       }
       return { between };
     })();
@@ -1294,7 +1294,6 @@
     let lineFrame = null;
     let glideFrame = null;
     let focusBeforeLightbox = null;
-    const pendingHighlights = new Set();
     waiting.textContent = currentLabels.waiting4file;
     document.title = currentLabels.idea;
     function readFlow() {
@@ -1558,7 +1557,7 @@
         chip.setAttribute('aria-expanded', String(!panel.hidden));
         const dot = element('span', 'research-dot ' + note.status); dot.setAttribute('aria-hidden', 'true');
         chip.append(dot, element('span', 'research-chip-label', note.topic));
-        if (changes.research[note.id].changed) chip.classList.add('highlight');
+        if (changes.changedResearch.includes(note.id)) chip.classList.add('highlight');
         const group = element('div', 'research-chip-group ' + note.status); group.append(chip);
         if (note.status === 'running') bindSteps(group, note.id, true);
         chips.append(group); panels.append(panel);
@@ -1911,9 +1910,8 @@
       const radioFocus = focused && focused.matches('[data-answer-option]') ? { id: focused.closest('.question-card').dataset.questionId, option: focused.dataset.answerOption } : null;
       const focusId = focused && focused.closest('.node') && focused.closest('.node').dataset.nodeId;
       currentSession = GrillSession.model(session, user, { serverMode, baseUrl: sessionUrl });
-      const changes = GrillChanges.between(previousSession, currentSession, { addedReferenceIds: pendingHighlights, idle: Date.now() - lastInteraction >= 10000 });
+      const changes = GrillChanges.between(previousSession, currentSession, { idle: Date.now() - lastInteraction >= 10000 });
       previousSession = currentSession;
-      for (const id of changes.consumedReferenceIds) pendingHighlights.delete(id);
       currentUserRefs = currentSession.userRefs;
       currentLabels = sessionLabels(currentSession);
       const asking = new Set(currentSession.questionsByStatus.asking.map(q => q.id));
@@ -2207,7 +2205,21 @@
         const caption = element('h2', 'caption board-caption', currentLabels.research);
         caption.style.left = graph.boardRefX + 'px'; caption.style.top = graph.researchCaptionY + 'px'; world.append(caption);
       }
-      drawLines();
+      drawLines(); fitFarLabels();
+    }
+    // Far view: a title gets the largest type, up to 36px, that still fits inside its card.
+    function fitFarLabels() {
+      if (!world.classList.contains('far')) return;
+      const labels = [...world.querySelectorAll('.question-card > .far-label, .idea-card > .far-label')];
+      const low = labels.map(() => 12), high = labels.map(() => 36);
+      for (let step = 0; step < 6; step++) {
+        const tried = labels.map((_, index) => step ? (low[index] + high[index]) / 2 : 36);
+        labels.forEach((label, index) => { label.style.fontSize = tried[index] + 'px'; });
+        labels.forEach((label, index) => {
+          if (label.scrollHeight > label.clientHeight + 1 || label.scrollWidth > label.clientWidth + 1) high[index] = tried[index]; else low[index] = tried[index];
+        });
+      }
+      labels.forEach((label, index) => { label.style.fontSize = ''; label.style.setProperty('--far-max', low[index] + 'px'); });
     }
     function applyOffsets() {
       if (!graph) return;
@@ -2364,7 +2376,9 @@
         specPanel: specBox ? { left: specBox.left, top: specBox.top } : null };
     }
     function applyView() {
+      const enteredFar = GrillCamera.isFar(view.z) && !world.classList.contains('far');
       world.style.setProperty('--z', String(view.z)); world.classList.toggle('far', GrillCamera.isFar(view.z));
+      if (enteredFar) fitFarLabels();
       world.style.transform = 'translate(' + view.x + 'px, ' + view.y + 'px) scale(' + view.z + ')';
       grid.style.setProperty('--dot-radius', view.z + 'px');
       grid.style.backgroundSize = (24 * view.z) + 'px ' + (24 * view.z) + 'px';
@@ -2377,7 +2391,7 @@
     function zoomAt(zoom, x, y) {
       recordInteraction(); cancelGlide();
       const point = worldPoint(x, y);
-      view.z = Math.max(.2, Math.min(2, zoom)); view.x = x - point.x * view.z; view.y = y - point.y * view.z;
+      view.z = Math.max(.1, Math.min(2, zoom)); view.x = x - point.x * view.z; view.y = y - point.y * view.z;
       applyView();
     }
     function zoomCenter(factor) { zoomAt(view.z * factor, window.innerWidth / 2, window.innerHeight / 2); }
@@ -2532,7 +2546,7 @@
         recordInteraction();
         const pair = touchPair(); if (pair.length < 2) return;
         const x = (pair[0].x + pair[1].x) / 2, y = (pair[0].y + pair[1].y) / 2;
-        view.z = Math.max(.2, Math.min(2, pinch.zoom * Math.hypot(pair[0].x - pair[1].x, pair[0].y - pair[1].y) / pinch.distance));
+        view.z = Math.max(.1, Math.min(2, pinch.zoom * Math.hypot(pair[0].x - pair[1].x, pair[0].y - pair[1].y) / pinch.distance));
         view.x = x - pinch.point.x * view.z; view.y = y - pinch.point.y * view.z; applyView(); return;
       }
       if (!gesture || gesture.pointerId !== event.pointerId) return;
@@ -2667,8 +2681,6 @@
         const response = await fetch(new URL('api/ping', window.location.href), { cache: 'no-store', credentials: 'same-origin' });
         const data = await response.json(); serverMode = response.ok && data.ok === true && data.board === 1;
       } catch (_) { serverMode = false; }
-      syncResearchSteps();
-      if (serverMode && currentSession) { lastRenderedJson = null; renderLatest(); }
     }
     function transferUrl(transfer) {
       const lines = GrillSession.string(transfer.getData('text/uri-list')).split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
@@ -2682,12 +2694,7 @@
           const query = new URLSearchParams({ target, name: file.name || '' });
           data = await apiRequest('api/refs?' + query, 'POST', file, file.type);
         } else data = await apiRequest('api/refs', 'POST', { url, target });
-        if (data.ref && data.ref.id) {
-          pendingHighlights.add(GrillSession.nodeId('ref:user', data.ref.id));
-          if (position) {
-            pendingDropPositions.set(GrillSession.nodeId('ref:user', data.ref.id), { x: position.x, y: position.y });
-          }
-        }
+        if (data.ref && data.ref.id && position) pendingDropPositions.set(GrillSession.nodeId('ref:user', data.ref.id), { x: position.x, y: position.y });
         await loadFiles(); toast(currentLabels.refAdded);
       } catch (error) { toast(currentLabels.refFailed + ': ' + error.message); }
     }
@@ -2778,8 +2785,11 @@
       })().finally(() => { loading = null; });
       return loading;
     }
-    applyView(); updateSpec(); detectServer(); loadFiles();
-    setInterval(() => loadFiles(false), 1000);
+    // A hand on the mouse means the user is reading: the view must not leave under it.
+    window.addEventListener('pointermove', recordInteraction, { passive: true });
+    applyView(); updateSpec();
+    // The first render needs to know whether a server is behind the page: the round bar changes where the view lands.
+    detectServer().then(() => { loadFiles(); setInterval(() => loadFiles(false), 1000); });
   </script>
 </body>
 </html>

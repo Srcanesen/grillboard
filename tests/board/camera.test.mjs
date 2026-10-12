@@ -26,9 +26,9 @@ test('fit zooms a wide tree out', () => {
     { x: 40, y: 383.44, z: .46 });
 });
 
-test('fit clamps zoom to .2 and 1 even for extreme bounds', () => {
+test('fit clamps zoom to .1 and 1 even for extreme bounds', () => {
   assertView(camera.fit([{ x: 0, y: 0, width: 10000, height: 10000 }], screen()),
-    { x: -500, y: -597.2, z: .2 });
+    { x: 0, y: -98.6, z: .1 });
   assertView(camera.fit([{ x: 0, y: 0, width: 1, height: 1 }], screen()),
     { x: 499.5, y: 413.5, z: 1 });
 });
@@ -170,10 +170,10 @@ const baselineFits = [
     expected: {"x": 701.4540942928039, "y": 286.34615384615387, "z": 0.2648883374689826} },
   { name: "active/390x844/open/fit", boxes: activeBoxes,
     screen: {"width": 390, "height": 844, "boardHidden": false, "header": {"right": 374, "bottom": 86.25}, "toolbar": {"right": 270.234375, "top": 266.609375}, "roundBar": {"top": 170.609375}, "specPanel": {"left": 16, "top": 321.609375}},
-    expected: {"x": 241.4, "y": 72.62968749999999, "z": 0.2} },
+    expected: {"x": 218.2, "y": 100.5296875, "z": 0.1} },
   { name: "active/390x844/collapsed/fit", boxes: activeBoxes,
     screen: {"width": 390, "height": 844, "boardHidden": false, "header": {"right": 374, "bottom": 86.25}, "toolbar": {"right": 270.234375, "top": 781}, "roundBar": {"top": 685}, "specPanel": null},
-    expected: {"x": 241.4, "y": 329.825, "z": 0.2} },
+    expected: {"x": 226.05354058721935, "y": 348.2804404145078, "z": 0.13385146804835923} },
   { name: "done/1280x800/open/fit", boxes: doneBoxes,
     screen: {"width": 1280, "height": 800, "boardHidden": false, "header": {"right": 436, "bottom": 125.25}, "toolbar": {"right": 270.234375, "top": 737}, "roundBar": null, "specPanel": {"left": 904, "top": 16}},
     expected: {"x": 528.9381706693919, "y": 348.4159427695452, "z": 0.3316300459887583} },
@@ -182,10 +182,10 @@ const baselineFits = [
     expected: {"x": 725.3551354113439, "y": 382.156361778232, "z": 0.36791006642820645} },
   { name: "done/390x844/open/fit", boxes: doneBoxes,
     screen: {"width": 390, "height": 844, "boardHidden": false, "header": {"right": 374, "bottom": 86.25}, "toolbar": {"right": 270.234375, "top": 266.609375}, "roundBar": null, "specPanel": {"left": 16, "top": 321.609375}},
-    expected: {"x": 241.4, "y": 166.7296875, "z": 0.2} },
+    expected: {"x": 218.2, "y": 171.5796875, "z": 0.1} },
   { name: "done/390x844/collapsed/fit", boxes: doneBoxes,
     screen: {"width": 390, "height": 844, "boardHidden": false, "header": {"right": 374, "bottom": 86.25}, "toolbar": {"right": 270.234375, "top": 781}, "roundBar": null, "specPanel": null},
-    expected: {"x": 241.4, "y": 459.425, "z": 0.2} },
+    expected: {"x": 226.05354058721935, "y": 462.63320379965455, "z": 0.13385146804835923} },
 ];
 for (const sample of baselineFits) {
   test(`browser baseline fit: ${sample.name}`, () => {
