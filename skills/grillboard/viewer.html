@@ -381,9 +381,12 @@
   <!-- Pure logic lives in the two blocks below: no document, no window, no state shared with the page.
        Each block defines one global. Tests load a block by its id: `node --test tests/board/*.test.mjs`. -->
   <script id="grill-session">
-    // model(rawSession, rawUser, options = {}) -> normalized session fields plus userRefs, questionsByStatus, questionsById, openQuestions, researchByStatus, unfinishedResearch, pendingCount; questions have pending (boolean)/pendingItem (batch item or null), refs/research have parsedTarget; groups preserve file order, lookup is an object; serverMode: false disables pending.
+    // model(rawSession, rawUser, options = {}) -> normalized lang, title, idea, answered, status, labels, refs, sketches, architecture, research, questions;
+    // plus userRefs, boardRefs, optionPictures, questionsByStatus, questionsById, openQuestions, researchByStatus, boardResearch, unfinishedResearch, pendingCount.
+    // Questions hold pending (boolean), pendingItem (batch item or null), validDependencies (ids), research (notes), optionPictures (option id -> reference); refs hold nodeId; refs/research keep raw target and parsedTarget.
+    // boardRefs are usable standalone refs with anchorId (question/idea node id or ''); optionPictures lists the first usable picture per exact option target, agent refs before user refs, excluding waiting questions; boardResearch holds notes without a known question.
+    // Groups preserve file order; lookups are objects; options.serverMode: false disables pending; options.baseUrl resolves reference sources (default https://grillboard.invalid/).
     // parseTarget(target) -> { questionId, optionId }, each '' when absent; 'idea' remains questionId 'idea'.
-    // batchNumber(id) -> positive number for a<number> with no leading zero, otherwise 0.
     // hasAnswer(answer) -> true when an option is chosen or text is not blank.
     // ANSWER_TEXT_MAX -> 2000, the maximum answer text length.
     // questionNumber(id) -> digit string for q<number> (case insensitive, preserving zeros), otherwise ''.
@@ -393,6 +396,8 @@
     // string(value) -> string for strings/numbers/booleans, otherwise ''; shared by page text readers.
     // array(value) -> array, otherwise []; shared by page state readers.
     // singleWebUrl(value) -> trimmed complete HTTP(S) URL, otherwise ''; shared by research, Markdown and pasted links.
+    // safeSource(value, baseUrl) -> trimmed relative or HTTP(S) destination, otherwise ''; default baseUrl is https://grillboard.invalid/.
+    // isPicture(ref) -> true for image kind or PNG/JPEG/GIF/WebP/SVG extension (ignoring query/fragment).
     const GrillSession = (() => {
       // Normalize optional and malformed fields at the boundary.
       function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; }
@@ -440,7 +445,7 @@
       function normalizeResearch(value) {
         return array(value).map(value => {
           const note = object(value);
-          return { id: string(note.id), target: parseTarget(note.target).questionId, parsedTarget: parseTarget(note.target), topic: string(note.topic),
+          return { id: string(note.id), target: string(note.target), parsedTarget: parseTarget(note.target), topic: string(note.topic),
             status: ['todo', 'running', 'done'].includes(note.status) ? note.status : 'todo', finding: string(note.finding), report: string(note.report),
             sources: array(note.sources).map(value => {
               const source = object(value);
@@ -451,7 +456,7 @@
       function normalizeRefs(value, user) {
         return array(value).map(value => {
           const ref = object(value);
-          return { id: string(ref.id), src: string(ref.src), target: string(ref.target), parsedTarget: parseTarget(ref.target), caption: string(ref.caption),
+          return { id: string(ref.id), nodeId: nodeId(user ? 'ref:user' : 'ref:agent', ref.id), src: string(ref.src), target: string(ref.target), parsedTarget: parseTarget(ref.target), caption: string(ref.caption),
             note: string(ref.note), name: string(ref.name), kind: string(ref.kind), user: user === true };
         });
       }
@@ -460,6 +465,14 @@
         if (!/^https?:\/\/\S+$/i.test(value)) return '';
         try { const url = new URL(value); return /^https?:$/.test(url.protocol) ? value : ''; } catch (_) { return ''; }
       }
+      function safeSource(value, baseUrl = 'https://grillboard.invalid/') {
+        const src = string(value).trim();
+        if (!src || /[\\\u0000-\u001f\u007f]/.test(src) || src.startsWith('//')) return '';
+        if (/^[a-z][a-z0-9+.-]*:/i.test(src) && !/^https?:/i.test(src)) return '';
+        try { const url = new URL(src, baseUrl); return /^https?:/i.test(src) ? (/^https?:$/.test(url.protocol) ? src : '') : src; }
+        catch (_) { return ''; }
+      }
+      function isPicture(ref) { return ref.kind === 'image' || /\.(png|jpe?g|gif|webp|svg)$/i.test(ref.src.split(/[?#]/)[0]); }
       function parseTarget(target) {
         const parts = string(target).split(':');
         return { questionId: parts[0] || '', optionId: parts[1] || '' };
@@ -487,8 +500,34 @@
         const questionsByStatus = { settled: [], asking: [], researching: [], waiting: [] };
         const questionsById = Object.fromEntries(data.questions.map(q => [q.id, q]));
         const researchByStatus = { todo: [], running: [], done: [] };
+        const userRefs = normalizeRefs(user.refs, true);
+        const boardResearch = [], boardRefs = [], optionPictures = [];
+        for (const q of data.questions) {
+          q.validDependencies = [...new Set(q.dependsOn)].filter(id => id !== q.id && Object.prototype.hasOwnProperty.call(questionsById, id));
+          q.research = []; q.optionPictures = {};
+        }
+        for (const q of data.questions) { q.research = questionsById[q.id].research; q.optionPictures = questionsById[q.id].optionPictures; }
         for (const q of data.questions) questionsByStatus[q.status].push(q);
-        for (const note of data.research) researchByStatus[note.status].push(note);
+        for (const note of data.research) {
+          researchByStatus[note.status].push(note);
+          if (Object.prototype.hasOwnProperty.call(questionsById, note.parsedTarget.questionId)) questionsById[note.parsedTarget.questionId].research.push(note);
+          else boardResearch.push(note);
+        }
+        for (const ref of data.refs.concat(userRefs)) {
+          const src = safeSource(ref.src, options.baseUrl);
+          if (!src) continue;
+          const usable = { ...ref, src };
+          const q = Object.prototype.hasOwnProperty.call(questionsById, ref.parsedTarget.questionId) ? questionsById[ref.parsedTarget.questionId] : null;
+          const optionTarget = q && q.options.some(option => ref.parsedTarget.optionId === option.id && ref.target === q.id + ':' + option.id);
+          if (optionTarget && q.status !== 'waiting' && isPicture(usable) && !Object.prototype.hasOwnProperty.call(q.optionPictures, ref.parsedTarget.optionId)) {
+            Object.defineProperty(q.optionPictures, ref.parsedTarget.optionId, { value: usable, enumerable: true });
+            optionPictures.push(usable);
+          } else {
+            const target = optionTarget ? q.id : ref.target;
+            const anchorId = target === 'idea' || target === nodeId('idea') ? nodeId('idea') : Object.prototype.hasOwnProperty.call(questionsById, target) ? target : '';
+            boardRefs.push({ ...usable, anchorId });
+          }
+        }
         const asking = new Set(questionsByStatus.asking.map(q => q.id));
         const pending = new Map();
         if (options.serverMode !== false) {
@@ -497,11 +536,11 @@
           for (const batch of batches) for (const item of array(batch.items).map(object)) if (asking.has(item.question)) pending.set(item.question, item);
         }
         for (const q of data.questions) { q.pending = q.status === 'asking' && pending.has(q.id); q.pendingItem = q.pending ? pending.get(q.id) : null; }
-        return { ...data, userRefs: normalizeRefs(user.refs, true), questionsByStatus, questionsById,
-          openQuestions: data.questions.filter(q => q.status !== 'settled'), researchByStatus,
+        return { ...data, userRefs, boardRefs, optionPictures, questionsByStatus, questionsById,
+          openQuestions: data.questions.filter(q => q.status !== 'settled'), researchByStatus, boardResearch,
           unfinishedResearch: data.research.filter(note => note.status !== 'done'), pendingCount: pending.size };
       }
-      return { model, parseTarget, batchNumber, hasAnswer, ANSWER_TEXT_MAX, questionNumber, nodeId, parseNodeId, object, string, array, singleWebUrl };
+      return { model, parseTarget, hasAnswer, ANSWER_TEXT_MAX, questionNumber, nodeId, parseNodeId, object, string, array, singleWebUrl, safeSource, isPicture };
     })();
   </script>
   <!-- The camera block is separate from the session block: it knows rectangles, not questions. -->
@@ -663,8 +702,7 @@
     }
 
     // Public Markdown builder shares the panel's decision fallback.
-    function buildSpecMarkdown(session, labels, userRefs) {
-      const data = GrillSession.model(session, { refs: userRefs });
+    function buildSpecMarkdown(data, labels) {
       const text = { ...sessionLabels(data), ...GrillSession.object(labels) };
       const parts = ['# ' + data.title];
       if (data.idea) parts.push(data.idea);
@@ -927,15 +965,9 @@
       const browser = GrillSession.string(navigator.language).slice(0, 2).toLowerCase();
       return Object.prototype.hasOwnProperty.call(LABELS, browser) ? browser : 'en';
     }
-    function safeSource(value) {
-      const src = GrillSession.string(value).trim();
-      if (!src || /[\\\u0000-\u001f\u007f]/.test(src) || src.startsWith('//')) return '';
-      if (/^[a-z][a-z0-9+.-]*:/i.test(src) && !/^https?:/i.test(src)) return '';
-      try { const url = new URL(src, sessionUrl); return /^https?:/i.test(src) ? (/^https?:$/.test(url.protocol) ? src : '') : src; }
-      catch (_) { return ''; }
-    }
+    function safeSource(value) { return GrillSession.safeSource(value, sessionUrl); }
     function fileName(src) { return GrillSession.string(src).split(/[?#]/)[0].split('/').pop() || GrillSession.string(src); }
-    function isPicture(ref) { return ref.kind === 'image' || /\.(png|jpe?g|gif|webp|svg)$/i.test(ref.src.split(/[?#]/)[0]); }
+    function isPicture(ref) { return GrillSession.isPicture(ref); }
 
     // Runtime state separates measured geometry, saved positions, and the viewport.
     const warning = document.getElementById('warning');
@@ -1130,17 +1162,14 @@
       const number = GrillSession.questionNumber(q.id);
       return number ? labels.qPrefix + number : q.id.toUpperCase();
     }
-    function validDependencies(q, questionsById) {
-      return [...new Set(q.dependsOn)].filter(id => id !== q.id && questionsById.has(id));
-    }
-    function questionCard(q, labels, questionsById, pictures, researchNotes) {
+    function questionCard(q, labels, questionsById) {
       const card = element('article', 'question-card ' + q.status);
       const pending = q.pendingItem;
       const editable = serverMode && q.status === 'asking' && !pending;
       const interactive = editable || !!pending;
       const answer = pending || (editable ? draftFor(q.id) : q.answer);
       if (pending) card.classList.add('pending');
-      const tiled = q.options.some(option => variantSketch(q, option) || pictures.has(q.id + ':' + option.id));
+      const tiled = q.options.some(option => variantSketch(q, option) || Object.prototype.hasOwnProperty.call(q.optionPictures, option.id));
       if (tiled) card.classList.add('picture-options');
       card.classList.toggle('compact', q.status === 'settled' && !expandedCards.has(q.id));
       card.tabIndex = 0; card.setAttribute('role', 'treeitem');
@@ -1207,7 +1236,7 @@
               row.addEventListener('click', event => { if (event.detail === 0 && event.target === row && editable) chooseAnswer(q.id, option.id); });
             }
             if (tiled) {
-              const ref = pictures.get(q.id + ':' + option.id);
+              const ref = Object.prototype.hasOwnProperty.call(q.optionPictures, option.id) ? q.optionPictures[option.id] : null;
               const variant = variantSketch(q, option);
               let visual;
               if (variant) {
@@ -1255,15 +1284,15 @@
         if (q.status === 'researching') details.append(element('p', 'note', labels.researchingHint));
         body.append(details);
       } else {
-        const dependencies = validDependencies(q, questionsById).map(id => questionsById.get(id)).filter(parent => !currentSession.questionsByStatus.settled.includes(parent));
+        const dependencies = q.validDependencies.map(id => questionsById[id]).filter(parent => !currentSession.questionsByStatus.settled.includes(parent));
         body.append(element('p', 'note', labels.waitingOn + ': ' + dependencies.map(parent => questionLabel(parent, labels)).join(', ')));
       }
-      const secondary = validDependencies(q, questionsById).slice(1);
+      const secondary = q.validDependencies.slice(1);
       if (secondary.length) body.append(element('div', 'dependency-chip', interpolate(labels.alsoDependsOn, {
-        ids: secondary.map(id => questionLabel(questionsById.get(id), labels)).join(', ')
+        ids: secondary.map(id => questionLabel(questionsById[id], labels)).join(', ')
       })));
       card.append(farLabel((q.status === 'settled' ? '✓ ' : '') + q.title));
-      appendResearchChips(body, q, researchNotes.filter(note => !currentSession.researchByStatus.done.includes(note) || !safeSource(note.report)));
+      appendResearchChips(body, q, q.research.filter(note => !currentSession.researchByStatus.done.includes(note) || !safeSource(note.report)));
       return card;
     }
     function appendResearchChips(card, q, notes) {
@@ -1313,7 +1342,7 @@
       const button = element('button', 'copy-button', labels.copySpec);
       button.type = 'button';
       button.addEventListener('click', async () => {
-        const copied = await copyMarkdown(buildSpecMarkdown(data, labels, currentUserRefs));
+        const copied = await copyMarkdown(buildSpecMarkdown(data, labels));
         if (!copied || !button.isConnected) return;
         clearTimeout(copyResetTimer);
         button.textContent = labels.copied;
@@ -1385,8 +1414,8 @@
       const byId = new Map(questions.map(node => [node.id, node]));
       const clusters = [], items = new Map(), levels = [], edges = [];
       function addCluster(node) {
-        const pinned = refs.filter(ref => node.id === idea.id ? ref.target === 'idea' || ref.target === idea.id : ref.target !== 'idea' && ref.target === node.id);
-        const stacked = reports.filter(report => node.kind === 'question' && report.target === node.id);
+        const pinned = refs.filter(ref => ref.anchorId === node.id);
+        const stacked = reports.filter(report => node.kind === 'question' && report.parsedTarget.questionId === node.id);
         const stackHeight = node.height + stacked.reduce((sum, report) => sum + report.height + 8, 0);
         const height = pinned.reduce((sum, ref, index) => sum + ref.height + (index ? 12 : 0), 0);
         const item = { id: node.id, width: node.width + (pinned.length ? Math.max(...pinned.map(ref => ref.width)) + 24 : 0), height: Math.max(stackHeight, height),
@@ -1400,7 +1429,7 @@
       addCluster(idea); parents[idea.id] = null;
       for (const node of questions) {
         addCluster(node);
-        const valid = [...new Set(node.dependsOn || [])].filter(id => id !== node.id && byId.has(id));
+        const valid = node.validDependencies;
         parents[node.id] = valid[0] || idea.id; secondary[node.id] = valid.slice(1);
       }
       // Malformed cyclic input is rooted deterministically so the board remains usable.
@@ -1486,7 +1515,7 @@
         }
       }
       const boardRefs = refs.filter(ref => !positions[ref.id]);
-      const boardResearch = nodes.filter(node => node.kind === 'research' && !byId.has(GrillSession.parseTarget(node.target).questionId));
+      const boardResearch = nodes.filter(node => node.kind === 'research' && !byId.has(node.parsedTarget.questionId));
       const boardReports = reports.filter(report => !positions[report.id]);
       const boardColumn = boardRefs.concat(boardResearch, boardReports);
       const boardRefX = Math.min(...clusters.map(item => item.x), ...sketches.map(sketch => positions[sketch.id].x)) - 80 - Math.max(200, ...boardColumn.map(node => node.width));
@@ -1545,7 +1574,7 @@
       node.append(img);
       node.dataset.picture = 'true';
       node.pictureReference = ref;
-      if (ref.user) node.dataset.inlineRef = GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id);
+      if (ref.user) node.dataset.inlineRef = ref.nodeId;
       return node;
     }
     function referenceCard(ref) {
@@ -1573,12 +1602,12 @@
       const remove = button('×', currentLabels.deleteRef, async () => {
         try {
           await apiRequest('api/refs/' + encodeURIComponent(ref.id), 'DELETE');
-          delete manualOffsets[GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id)]; saveOffsets(); await loadFiles();
+          delete manualOffsets[ref.nodeId]; saveOffsets(); await loadFiles();
         } catch (error) { toast(currentLabels.refFailed + ': ' + error.message); }
       }, 'delete-ref');
       const note = button(ref.note || currentLabels.addNote, currentLabels.addNote, () => editNote(note, ref), 'ref-note' + (ref.note ? '' : ' placeholder'));
       card.append(remove, note);
-      if (ref.target === 'idea' || (currentSession && Object.prototype.hasOwnProperty.call(currentSession.questionsById, ref.parsedTarget.questionId))) {
+      if ((ref.anchorId === ideaId && ref.parsedTarget.questionId === 'idea') || (currentSession && Object.prototype.hasOwnProperty.call(currentSession.questionsById, ref.parsedTarget.questionId))) {
         card.append(button('−', currentLabels.disconnect, async () => {
           try { await updateReferenceTarget(ref, ''); }
           catch (error) { toast(currentLabels.refFailed + ': ' + error.message); }
@@ -1587,7 +1616,7 @@
     }
     async function updateReferenceTarget(ref, target) {
       await apiRequest('api/refs/' + encodeURIComponent(ref.id), 'POST', { target });
-      delete manualOffsets[GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id)]; saveOffsets(); applyOffsets(); scheduleLines();
+      delete manualOffsets[ref.nodeId]; saveOffsets(); applyOffsets(); scheduleLines();
       await loadFiles();
     }
     function editNote(note, ref) {
@@ -1768,7 +1797,7 @@
       const answerFocus = focused && focused.matches('.answer-editor') ? { id: focused.dataset.answerQuestion, start: focused.selectionStart, end: focused.selectionEnd } : null;
       const radioFocus = focused && focused.matches('[data-answer-option]') ? { id: focused.closest('.question-card').dataset.questionId, option: focused.dataset.answerOption } : null;
       const focusId = focused && focused.closest('.node') && focused.closest('.node').dataset.nodeId;
-      currentSession = GrillSession.model(session, user, { serverMode });
+      currentSession = GrillSession.model(session, user, { serverMode, baseUrl: sessionUrl });
       currentUserRefs = currentSession.userRefs;
       currentLabels = sessionLabels(currentSession);
       const asking = new Set(currentSession.questionsByStatus.asking.map(q => q.id));
@@ -1810,16 +1839,7 @@
       const keptNodes = new Set([...sketchNodes.values()].map(entry => entry.node));
       for (const child of Array.from(world.children)) if (!keptNodes.has(child)) child.remove();
       world.prepend(connectorLayer); world.append(socketLayer);
-      const references = data.refs.concat(currentUserRefs).filter(ref => safeSource(ref.src)).map(ref => ({ ...ref, src: safeSource(ref.src) }));
-      const questionsById = new Map(Object.entries(data.questionsById));
-      const pictures = new Map();
-      const remaining = [];
-      for (const ref of references) {
-        const q = questionsById.get(ref.parsedTarget.questionId);
-        const optionTarget = q && q.options.some(option => ref.parsedTarget.optionId === option.id && ref.target === q.id + ':' + option.id);
-        if (optionTarget && q.status !== 'waiting' && isPicture(ref) && !pictures.has(ref.target)) pictures.set(ref.target, ref);
-        else remaining.push({ ...ref, target: optionTarget ? q.id : ref.target, parsedTarget: optionTarget ? GrillSession.parseTarget(q.id) : ref.parsedTarget });
-      }
+      const questionsById = data.questionsById;
       const idea = element('div', 'idea-card');
       idea.append(element('span', 'caption', labels.idea), element('strong', '', data.title));
       idea.append(element('p', 'idea-summary', data.idea));
@@ -1831,42 +1851,41 @@
       for (const q of data.questions) {
         if (cardNodes.has(q.id)) continue;
         if (q.status === 'settled' && previousStatuses.get(q.id) !== 'settled') expandedCards.delete(q.id);
-        const card = questionCard(q, labels, questionsById, pictures, data.research.filter(note => note.target === q.id));
+        const card = questionCard(q, labels, questionsById);
         const changed = previousStatuses.get(q.id) !== q.status;
         if (!firstRender && changed) card.classList.add('highlight');
         if (!firstRender && changed && q.status === 'asking') newAsking.push(q.id);
-        registerNode(q.id, card, { kind: 'question', dependsOn: q.dependsOn });
+        registerNode(q.id, card, { kind: 'question', validDependencies: q.validDependencies });
         cardNodes.set(q.id, card); nextStatuses.set(q.id, q.status);
       }
       previousStatuses = nextStatuses;
-      for (const ref of remaining) {
-        const id = GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id);
+      for (const ref of data.boardRefs) {
+        const id = ref.nodeId;
         const card = referenceCard(ref);
-        if (pendingHighlights.has(GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id))) { card.classList.add('highlight'); pendingHighlights.delete(GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id)); }
-        registerNode(id, card, { kind: 'reference', target: ref.target, ref });
+        if (pendingHighlights.has(ref.nodeId)) { card.classList.add('highlight'); pendingHighlights.delete(ref.nodeId); }
+        registerNode(id, card, { kind: 'reference', anchorId: ref.anchorId, parsedTarget: ref.parsedTarget, ref });
       }
-      for (const ref of pictures.values()) {
-        if (pendingHighlights.has(GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id))) {
+      for (const ref of data.optionPictures) {
+        if (pendingHighlights.has(ref.nodeId)) {
           const target = cardNodes.get(ref.parsedTarget.questionId);
           if (target) target.classList.add('highlight');
-          pendingHighlights.delete(GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id));
+          pendingHighlights.delete(ref.nodeId);
         }
       }
       const nextResearchStatuses = new Map();
-      for (const note of data.research) {
-        nextResearchStatuses.set(note.id, note.status);
-        if (questionsById.has(note.target)) continue;
+      for (const note of data.research) nextResearchStatuses.set(note.id, note.status);
+      for (const note of data.boardResearch) {
         const card = researchCard(note);
         if (previousResearchStatuses.get(note.id) !== note.status) card.classList.add('highlight');
-        registerNode(GrillSession.nodeId('research', note.id), card, { kind: 'research', target: note.target });
+        registerNode(GrillSession.nodeId('research', note.id), card, { kind: 'research', parsedTarget: note.parsedTarget });
       }
       previousResearchStatuses = nextResearchStatuses;
       const reports = data.researchByStatus.done.filter(note => safeSource(note.report));
       const newReports = reports.filter(note => !firstRender && !previousReports.has(note.id));
       for (const note of reports) {
-        const card = reportCard(note, questionsById.has(note.target));
+        const card = reportCard(note, Object.prototype.hasOwnProperty.call(questionsById, note.parsedTarget.questionId));
         if (newReports.some(added => added.id === note.id)) card.classList.add('highlight');
-        registerNode(GrillSession.nodeId('report', note.id), card, { kind: 'report', target: questionsById.has(note.target) ? note.target : '', noteId: note.id, note });
+        registerNode(GrillSession.nodeId('report', note.id), card, { kind: 'report', parsedTarget: note.parsedTarget, noteId: note.id, note });
       }
       previousReports = new Set(reports.map(note => note.id));
       for (const sketch of usableSketches()) updateSketchNode(sketch, changedSketches.has(sketch.id));
@@ -1886,7 +1905,7 @@
       else if (Date.now() - lastInteraction >= 10000) {
         // A sketch that just entered the board is shown with the idea it hangs from; otherwise the view follows the new questions.
         if (newSketches.length) focusView(true, [ideaId].concat(newSketches));
-        else if (newReports.length) focusView(true, [questionsById.has(newReports[0].target) ? newReports[0].target : ideaId, GrillSession.nodeId('report', newReports[0].id)]);
+        else if (newReports.length) focusView(true, [Object.prototype.hasOwnProperty.call(questionsById, newReports[0].parsedTarget.questionId) ? newReports[0].parsedTarget.questionId : ideaId, GrillSession.nodeId('report', newReports[0].id)]);
         else if (newAsking.length) focusView(true);
       }
     }
@@ -1919,7 +1938,7 @@
       if (record.kind === 'sketch') return record.sketch.height > record.sketch.width ? LAYOUT.sketchWidth.portrait : LAYOUT.sketchWidth.landscape;
       if (record.kind === 'idea') return LAYOUT.ideaWidth;
       if (record.kind === 'reference') return 200;
-      if (record.kind === 'report' && record.target && nodeRecords.has(record.target)) return nodeRecords.get(record.target).element.offsetWidth;
+      if (record.kind === 'report' && nodeRecords.has(record.parsedTarget.questionId)) return nodeRecords.get(record.parsedTarget.questionId).element.offsetWidth;
       if (record.kind === 'research' || record.kind === 'report') return 240;
       return record.element.classList.contains('picture-options') ? 460 : LAYOUT.questionWidth;
     }
@@ -2076,11 +2095,11 @@
     function measureAndLayout() {
       if (!currentSession) return;
       const sizes = [];
-      for (const record of nodeRecords.values()) if (record.kind === 'report' && record.target) applyNodeSize(record);
+      for (const record of nodeRecords.values()) if (record.kind === 'report' && nodeRecords.has(record.parsedTarget.questionId)) applyNodeSize(record);
       for (const record of nodeRecords.values()) {
         record.width = record.element.offsetWidth; record.height = record.element.offsetHeight;
         sizes.push({ id: record.id, width: record.width, height: record.height, kind: record.kind,
-          dependsOn: record.dependsOn || [], target: record.target || '', noteId: record.noteId || '' });
+          validDependencies: record.validDependencies || [], anchorId: record.anchorId || '', parsedTarget: record.parsedTarget || { questionId: '', optionId: '' }, noteId: record.noteId || '' });
       }
       graph = layoutGraph(sizes);
       for (const [id, point] of pendingDropPositions) {
@@ -2385,7 +2404,7 @@
       ended.record.element.remove(); nodeRecords.delete(ended.record.id);
       delete manualOffsets[ended.record.id]; delete graph.positions[ended.record.id]; delete graph.parents[ended.record.id]; saveOffsets(); scheduleLines();
     }
-    function refByNodeId(id) { return currentUserRefs.find(ref => GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id) === id); }
+    function refByNodeId(id) { return currentUserRefs.find(ref => ref.nodeId === id); }
     canvas.addEventListener('pointerdown', event => {
       if (nodeResize) { event.preventDefault(); return; }
       if (event.button !== 0) return;
@@ -2431,8 +2450,8 @@
       if (!gesture.dragged && gesture.inlineRef) {
         // An option picture becomes a temporary reference card while it is dragged.
         const ref = gesture.inlineRef, point = worldPoint(gesture.startX, gesture.startY);
-        const card = referenceCard(ref), id = GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id);
-        registerNode(id, card, { kind: 'reference', target: '', ref });
+        const card = referenceCard(ref), id = ref.nodeId;
+        registerNode(id, card, { kind: 'reference', anchorId: '', parsedTarget: ref.parsedTarget, ref });
         const record = nodeRecords.get(id); record.width = card.offsetWidth; record.height = card.offsetHeight;
         record.x = point.x - 100; record.y = point.y - 40;
         graph.positions[id] = { x: record.x, y: record.y }; graph.parents[id] = null;
