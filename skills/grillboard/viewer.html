@@ -616,8 +616,177 @@
   </script>
   <!-- The layout block knows node kinds and sizes, not the page: sizes in, positions out. -->
   <script id="grill-layout">
-    // GrillLayout: where every node of the board sits.
-    const GrillLayout = {};
+    // layout({ nodes, flow, constants, manualOffsets? }) -> read-only board placement; nodes carry id, kind, width, height, validDependencies?, anchorId?, parsedTarget?, noteId?.
+    // cluster({ node, refs, reports, flow, manualOffsets? }) -> { width, height, positions, outputId } for one card and its attachments; node may carry x/y, reports may carry live x/y.
+    // cluster positions include direct attachment offsets; outputId is the lowest card/report without a direct report offset.
+    // Result fields: positions/basePositions (id -> { x, y }, with/without inherited offsets), parents, secondary, clusters, levels, edges, boardRefs, boardResearch, boardRefX, researchCaptionY, boardReports, sketches.
+    // Clusters/levels contain { id, width, height, cardWidth, cardHeight, refs, reports, children, depth, x, y, span, cardSpan, levelSize }; edges contain { from, to }; sketches contains ids.
+    // flow is 'td' or 'lr'; constants carry ideaWidth, gapX, gapY, lrGapX, lrGapY; manualOffsets maps ids to { dx, dy }; inputs are never changed.
+    const GrillLayout = (() => {
+      function copy(value) {
+        if (Array.isArray(value)) return value.map(copy);
+        if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, copy(child)]));
+        return value;
+      }
+      function freeze(value) {
+        if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+          for (const child of Object.values(value)) freeze(child);
+          Object.freeze(value);
+        }
+        return value;
+      }
+      // Reports stack below the card; references sit beside it in td and below the stack in lr.
+      function cluster({ node, refs, reports, flow, manualOffsets = {} }) {
+        const positions = Object.create(null), x = node.x || 0, y = node.y || 0;
+        const stackHeight = node.height + reports.reduce((sum, report) => sum + report.height + 8, 0);
+        const refHeight = refs.reduce((sum, ref, index) => sum + ref.height + (index ? 12 : 0), 0);
+        const width = flow === 'lr' ? Math.max(node.width, ...reports.map(report => report.width), ...refs.map(ref => ref.width))
+          : node.width + (refs.length ? Math.max(...refs.map(ref => ref.width)) + 24 : 0);
+        const height = flow === 'lr' ? stackHeight + (refs.length ? 24 + refHeight : 0) : Math.max(stackHeight, refHeight);
+        positions[node.id] = { x, y };
+        let reportY = y + node.height + 8, outputId = node.id, bottom = y + node.height;
+        for (const report of reports) {
+          const offset = manualOffsets[report.id] || { dx: 0, dy: 0 };
+          const point = { x: x + offset.dx, y: reportY + offset.dy };
+          positions[report.id] = point; reportY += report.height + 8;
+          const reportBottom = (report.y === undefined ? point.y : report.y) + report.height;
+          if (!offset.dx && !offset.dy && reportBottom >= bottom) { bottom = reportBottom; outputId = report.id; }
+        }
+        let refY = flow === 'lr' ? y + stackHeight + 24 : y;
+        for (const ref of refs) {
+          const offset = manualOffsets[ref.id] || { dx: 0, dy: 0 };
+          positions[ref.id] = { x: (flow === 'lr' ? x : x + node.width + 24) + offset.dx, y: refY + offset.dy };
+          refY += ref.height + 12;
+        }
+        return freeze({ width, height, positions, outputId });
+      }
+      function layout({ nodes: inputNodes, flow, constants: LAYOUT, manualOffsets = {} }) {
+        const nodes = copy(inputNodes);
+        const positions = Object.create(null), parents = Object.create(null), secondary = Object.create(null);
+        const questions = nodes.filter(node => node.kind === 'question');
+        const refs = nodes.filter(node => node.kind === 'reference');
+        const reports = nodes.filter(node => node.kind === 'report');
+        const idea = nodes.find(node => node.kind === 'idea') || { id: '@idea', width: LAYOUT.ideaWidth, height: 80 };
+        const byId = new Map(questions.map(node => [node.id, node]));
+        const clusters = [], items = new Map(), levels = [], edges = [];
+        function addCluster(node) {
+          const pinned = refs.filter(ref => ref.anchorId === node.id);
+          const stacked = reports.filter(report => node.kind === 'question' && report.parsedTarget?.questionId === node.id);
+          const geometry = cluster({ node, refs: pinned, reports: stacked, flow });
+          const item = { id: node.id, width: geometry.width, height: geometry.height,
+            cardWidth: node.width, cardHeight: node.height, refs: pinned, reports: stacked, children: [], depth: 0, x: 0, y: 0 };
+          clusters.push(item); items.set(node.id, item);
+        }
+        addCluster(idea); parents[idea.id] = null;
+        for (const node of questions) {
+          addCluster(node);
+          const valid = [...new Set(node.validDependencies || [])].filter(id => id !== node.id && byId.has(id));
+          parents[node.id] = valid[0] || idea.id; secondary[node.id] = valid.slice(1);
+        }
+        // Malformed cyclic input is rooted deterministically so the board remains usable.
+        for (const node of questions) {
+          const visited = new Set(); let id = node.id;
+          while (id !== idea.id) {
+            if (visited.has(id)) { parents[id] = idea.id; break; }
+            visited.add(id); id = parents[id];
+          }
+        }
+        for (const node of questions) {
+          items.get(parents[node.id]).children.push(node.id);
+          edges.push({ from: parents[node.id], to: node.id });
+        }
+        // Packing runs along the sibling axis; levels advance along the other axis.
+        let siblingGap = LAYOUT.gapX, levelGap = LAYOUT.gapY;
+        for (const item of clusters) { item.span = item.width; item.cardSpan = item.cardWidth; item.levelSize = item.height; }
+        if (flow === 'lr') {
+          siblingGap = LAYOUT.lrGapY; levelGap = LAYOUT.lrGapX;
+          for (const item of clusters) { item.span = item.height; item.cardSpan = item.cardHeight; item.levelSize = item.width; }
+        }
+        function pack(id, depth) {
+          const item = items.get(id); item.depth = depth;
+          if (!levels[depth]) levels[depth] = []; levels[depth].push(item);
+          const children = item.children.map(child => pack(child, depth + 1));
+          const placed = new Map(); let width = 0; const centers = [];
+          for (const child of children) {
+            centers.push(width + child.center);
+            for (const [childId, x] of child.placed) placed.set(childId, width + x);
+            width += child.width + siblingGap;
+          }
+          if (children.length) width -= siblingGap;
+          const x = children.length ? (centers[0] + centers[centers.length - 1]) / 2 - item.cardSpan / 2 : 0;
+          const left = Math.min(0, x), right = Math.max(width, x + item.span);
+          placed.set(id, x);
+          for (const [childId, position] of placed) placed.set(childId, position - left);
+          return { placed, width: right - left, center: x - left + item.cardSpan / 2 };
+        }
+        const tree = pack(idea.id, 0);
+        let y = 0;
+        for (const level of levels) {
+          if (flow === 'lr') {
+            for (const item of level) { item.x = y; item.y = tree.placed.get(item.id) - tree.center; }
+          } else {
+            for (const item of level) { item.x = tree.placed.get(item.id) - tree.center; item.y = y; }
+          }
+          y += Math.max(...level.map(item => item.levelSize)) + levelGap;
+        }
+        for (const item of clusters) {
+          const geometry = cluster({ node: { id: item.id, x: item.x, y: item.y, width: item.cardWidth, height: item.cardHeight },
+            refs: item.refs, reports: item.reports, flow });
+          Object.assign(positions, copy(geometry.positions));
+          for (const child of item.refs.concat(item.reports)) parents[child.id] = item.id;
+        }
+        const sketches = nodes.filter(node => node.kind === 'sketch');
+        const root = items.get(idea.id);
+        if (flow === 'lr') {
+          const columnHeight = sketches.reduce((sum, sketch) => sum + sketch.height, 0) + Math.max(0, sketches.length - 1) * 24;
+          let sketchY = root.y + root.cardHeight / 2 - columnHeight / 2;
+          for (const sketch of sketches) {
+            positions[sketch.id] = { x: root.x - 56 - sketch.width, y: sketchY }; parents[sketch.id] = idea.id;
+            sketchY += sketch.height + 24;
+          }
+        } else {
+          const rowWidth = sketches.reduce((sum, sketch) => sum + sketch.width, 0) + Math.max(0, sketches.length - 1) * 24;
+          let sketchX = root.x + root.cardWidth / 2 - rowWidth / 2;
+          for (const sketch of sketches) {
+            positions[sketch.id] = { x: sketchX, y: root.y - 56 - sketch.height }; parents[sketch.id] = idea.id;
+            sketchX += sketch.width + 24;
+          }
+        }
+        const boardRefs = refs.filter(ref => !positions[ref.id]);
+        const boardResearch = nodes.filter(node => node.kind === 'research' && !byId.has(node.parsedTarget?.questionId));
+        const boardReports = reports.filter(report => !positions[report.id]);
+        const boardColumn = boardRefs.concat(boardResearch, boardReports);
+        const boardRefX = Math.min(...clusters.map(item => item.x), ...sketches.map(sketch => positions[sketch.id].x)) - 80 - Math.max(200, ...boardColumn.map(node => node.width));
+        let refY = 0;
+        for (const ref of boardRefs) { positions[ref.id] = { x: boardRefX, y: refY }; parents[ref.id] = null; refY += ref.height + 12; }
+        const researchCaptionY = boardRefs.length ? refY + 12 : -28;
+        if (boardRefs.length && boardResearch.length) refY = researchCaptionY + 28;
+        const placedReports = new Set();
+        function placeBoardItem(node) {
+          positions[node.id] = { x: boardRefX, y: refY }; parents[node.id] = null; refY += node.height + 12;
+        }
+        for (const note of boardResearch) {
+          placeBoardItem(note);
+          for (const report of boardReports.filter(report => (report.noteId && report.noteId === note.noteId) || report.id.slice(report.id.indexOf(':') + 1) === note.id.slice(note.id.indexOf(':') + 1))) {
+            placeBoardItem(report); placedReports.add(report.id);
+          }
+        }
+        for (const report of boardReports) if (!placedReports.has(report.id)) placeBoardItem(report);
+        const basePositions = copy(positions);
+        for (const [nodeId, point] of Object.entries(positions)) {
+          let dx = 0, dy = 0, id = nodeId;
+          while (id) {
+            const offset = manualOffsets[id];
+            if (offset) { dx += offset.dx; dy += offset.dy; }
+            id = parents[id];
+          }
+          point.x += dx; point.y += dy;
+        }
+        return freeze({ positions, basePositions, parents, secondary, clusters, levels, edges, boardRefs, boardResearch, boardRefX, researchCaptionY, boardReports, sketches: sketches.map(node => node.id) });
+      }
+
+      return { layout, cluster };
+    })();
   </script>
   <!-- The changes block compares two session models: what is new, what to highlight, where to look. -->
   <script id="grill-changes">
@@ -1414,139 +1583,6 @@
       return copied;
     }
 
-    // Pure tidy-tree layout packs whole subtrees, aligning levels by cluster height.
-    function layoutGraph(nodes) {
-      const positions = Object.create(null), parents = Object.create(null), secondary = Object.create(null);
-      const questions = nodes.filter(node => node.kind === 'question');
-      const refs = nodes.filter(node => node.kind === 'reference');
-      const reports = nodes.filter(node => node.kind === 'report');
-      const idea = nodes.find(node => node.kind === 'idea') || { id: GrillSession.nodeId('idea'), width: LAYOUT.ideaWidth, height: 80 };
-      const byId = new Map(questions.map(node => [node.id, node]));
-      const clusters = [], items = new Map(), levels = [], edges = [];
-      function addCluster(node) {
-        const pinned = refs.filter(ref => ref.anchorId === node.id);
-        const stacked = reports.filter(report => node.kind === 'question' && report.parsedTarget.questionId === node.id);
-        const stackHeight = node.height + stacked.reduce((sum, report) => sum + report.height + 8, 0);
-        const height = pinned.reduce((sum, ref, index) => sum + ref.height + (index ? 12 : 0), 0);
-        const item = { id: node.id, width: node.width + (pinned.length ? Math.max(...pinned.map(ref => ref.width)) + 24 : 0), height: Math.max(stackHeight, height),
-          cardWidth: node.width, cardHeight: node.height, refs: pinned, reports: stacked, children: [], depth: 0, x: 0, y: 0 };
-        if (flow === 'lr') {
-          item.width = Math.max(node.width, ...stacked.map(report => report.width), ...pinned.map(ref => ref.width));
-          item.height = stackHeight + (pinned.length ? 24 + height : 0);
-        }
-        clusters.push(item); items.set(node.id, item);
-      }
-      addCluster(idea); parents[idea.id] = null;
-      for (const node of questions) {
-        addCluster(node);
-        const valid = node.validDependencies;
-        parents[node.id] = valid[0] || idea.id; secondary[node.id] = valid.slice(1);
-      }
-      // Malformed cyclic input is rooted deterministically so the board remains usable.
-      for (const node of questions) {
-        const visited = new Set(); let id = node.id;
-        while (id !== idea.id) {
-          if (visited.has(id)) { parents[id] = idea.id; break; }
-          visited.add(id); id = parents[id];
-        }
-      }
-      for (const node of questions) {
-        items.get(parents[node.id]).children.push(node.id);
-        edges.push({ from: parents[node.id], to: node.id });
-      }
-      // Packing runs along the sibling axis; levels advance along the other axis.
-      let siblingGap = LAYOUT.gapX, levelGap = LAYOUT.gapY;
-      for (const item of clusters) { item.span = item.width; item.cardSpan = item.cardWidth; item.levelSize = item.height; }
-      if (flow === 'lr') {
-        siblingGap = LAYOUT.lrGapY; levelGap = LAYOUT.lrGapX;
-        for (const item of clusters) { item.span = item.height; item.cardSpan = item.cardHeight; item.levelSize = item.width; }
-      }
-      function pack(id, depth) {
-        const item = items.get(id); item.depth = depth;
-        if (!levels[depth]) levels[depth] = []; levels[depth].push(item);
-        const children = item.children.map(child => pack(child, depth + 1));
-        const placed = new Map(); let width = 0; const centers = [];
-        for (const child of children) {
-          centers.push(width + child.center);
-          for (const [childId, x] of child.placed) placed.set(childId, width + x);
-          width += child.width + siblingGap;
-        }
-        if (children.length) width -= siblingGap;
-        const x = children.length ? (centers[0] + centers[centers.length - 1]) / 2 - item.cardSpan / 2 : 0;
-        const left = Math.min(0, x), right = Math.max(width, x + item.span);
-        placed.set(id, x);
-        for (const [childId, position] of placed) placed.set(childId, position - left);
-        return { placed, width: right - left, center: x - left + item.cardSpan / 2 };
-      }
-      const tree = pack(idea.id, 0);
-      let y = 0;
-      for (const level of levels) {
-        if (flow === 'lr') {
-          for (const item of level) { item.x = y; item.y = tree.placed.get(item.id) - tree.center; }
-        } else {
-          for (const item of level) { item.x = tree.placed.get(item.id) - tree.center; item.y = y; }
-        }
-        y += Math.max(...level.map(item => item.levelSize)) + levelGap;
-      }
-      for (const item of clusters) {
-        positions[item.id] = { x: item.x, y: item.y };
-        let refX = item.x + item.cardWidth + 24, refY = item.y;
-        if (flow === 'lr') {
-          refX = item.x;
-          refY += item.cardHeight + item.reports.reduce((sum, report) => sum + report.height + 8, 0) + 24;
-        }
-        for (const ref of item.refs) {
-          positions[ref.id] = { x: refX, y: refY };
-          parents[ref.id] = item.id; refY += ref.height + 12;
-        }
-      }
-      for (const item of clusters) {
-        let reportY = item.y + item.cardHeight + 8;
-        for (const report of item.reports) {
-          positions[report.id] = { x: item.x, y: reportY };
-          parents[report.id] = item.id; reportY += report.height + 8;
-        }
-      }
-      const sketches = nodes.filter(node => node.kind === 'sketch');
-      const root = items.get(idea.id);
-      if (flow === 'lr') {
-        const columnHeight = sketches.reduce((sum, sketch) => sum + sketch.height, 0) + Math.max(0, sketches.length - 1) * 24;
-        let sketchY = root.y + root.cardHeight / 2 - columnHeight / 2;
-        for (const sketch of sketches) {
-          positions[sketch.id] = { x: root.x - 56 - sketch.width, y: sketchY }; parents[sketch.id] = idea.id;
-          sketchY += sketch.height + 24;
-        }
-      } else {
-        const rowWidth = sketches.reduce((sum, sketch) => sum + sketch.width, 0) + Math.max(0, sketches.length - 1) * 24;
-        let sketchX = root.x + root.cardWidth / 2 - rowWidth / 2;
-        for (const sketch of sketches) {
-          positions[sketch.id] = { x: sketchX, y: root.y - 56 - sketch.height }; parents[sketch.id] = idea.id;
-          sketchX += sketch.width + 24;
-        }
-      }
-      const boardRefs = refs.filter(ref => !positions[ref.id]);
-      const boardResearch = nodes.filter(node => node.kind === 'research' && !byId.has(node.parsedTarget.questionId));
-      const boardReports = reports.filter(report => !positions[report.id]);
-      const boardColumn = boardRefs.concat(boardResearch, boardReports);
-      const boardRefX = Math.min(...clusters.map(item => item.x), ...sketches.map(sketch => positions[sketch.id].x)) - 80 - Math.max(200, ...boardColumn.map(node => node.width));
-      let refY = 0;
-      for (const ref of boardRefs) { positions[ref.id] = { x: boardRefX, y: refY }; parents[ref.id] = null; refY += ref.height + 12; }
-      const researchCaptionY = boardRefs.length ? refY + 12 : -28;
-      if (boardRefs.length && boardResearch.length) refY = researchCaptionY + 28;
-      const placedReports = new Set();
-      function placeBoardItem(node) {
-        positions[node.id] = { x: boardRefX, y: refY }; parents[node.id] = null; refY += node.height + 12;
-      }
-      for (const note of boardResearch) {
-        placeBoardItem(note);
-        for (const report of boardReports.filter(report => (report.noteId && report.noteId === note.noteId) || GrillSession.parseNodeId(report.id).id === GrillSession.parseNodeId(note.id).id)) {
-          placeBoardItem(report); placedReports.add(report.id);
-        }
-      }
-      for (const report of boardReports) if (!placedReports.has(report.id)) placeBoardItem(report);
-      return { positions, parents, secondary, clusters, levels, edges, boardRefs, boardResearch, boardRefX, researchCaptionY, boardReports, sketches: sketches.map(node => node.id) };
-    }
-
     // Research cards and spec blocks use the same findings and safe source links.
     function researchBadge(status) {
       const keys = { todo: 'researchTodo', running: 'researchRunning', done: 'researchDone' };
@@ -2028,18 +2064,14 @@
       placeNode(record);
       if (record.kind === 'question') {
         const cluster = graph.clusters.find(item => item.id === record.id);
-        let y = record.y + record.height + 8;
-        for (const report of cluster.reports) {
-          const child = nodeRecords.get(report.id), offset = manualOffsets[report.id] || { dx: 0, dy: 0 };
+        const reports = cluster.reports.map(report => nodeRecords.get(report.id));
+        for (const child of reports) {
           applyNodeSize(child); child.width = child.element.offsetWidth; child.height = child.element.offsetHeight;
-          child.x = record.x + offset.dx; child.y = y + offset.dy; placeNode(child); y += child.height + 8;
         }
-        if (flow === 'lr') {
-          y += 16;
-          for (const ref of cluster.refs) {
-            const child = nodeRecords.get(ref.id), offset = manualOffsets[ref.id] || { dx: 0, dy: 0 };
-            child.x = record.x + offset.dx; child.y = y + offset.dy; placeNode(child); y += child.height + 12;
-          }
+        const refs = cluster.refs.map(ref => nodeRecords.get(ref.id));
+        const geometry = GrillLayout.cluster({ node: record, reports, refs, flow, manualOffsets });
+        for (const child of reports.concat(flow === 'lr' ? refs : [])) {
+          Object.assign(child, geometry.positions[child.id]); placeNode(child);
         }
       }
       drawLines();
@@ -2102,6 +2134,7 @@
         });
       }
     }
+    let layoutNodes = [];
     function measureAndLayout() {
       if (!currentSession) return;
       const sizes = [];
@@ -2111,9 +2144,10 @@
         sizes.push({ id: record.id, width: record.width, height: record.height, kind: record.kind,
           validDependencies: record.validDependencies || [], anchorId: record.anchorId || '', parsedTarget: record.parsedTarget || { questionId: '', optionId: '' }, noteId: record.noteId || '' });
       }
-      graph = layoutGraph(sizes);
+      layoutNodes = sizes;
+      graph = GrillLayout.layout({ nodes: layoutNodes, flow, constants: LAYOUT });
       for (const [id, point] of pendingDropPositions) {
-        const base = graph.positions[id];
+        const base = graph.basePositions[id];
         if (base) { manualOffsets[id] = { dx: point.x - base.x, dy: point.y - base.y }; pendingDropPositions.delete(id); saveOffsets(); }
       }
       applyOffsets();
@@ -2131,11 +2165,14 @@
     }
     function applyOffsets() {
       if (!graph) return;
+      graph = GrillLayout.layout({ nodes: layoutNodes, flow, constants: LAYOUT, manualOffsets });
       for (const record of nodeRecords.values()) {
-        const base = graph.positions[record.id]; if (!base) continue;
-        let dx = 0, dy = 0, id = record.id;
-        while (id) { const offset = manualOffsets[id]; if (offset) { dx += offset.dx; dy += offset.dy; } id = graph.parents[id]; }
-        record.x = base.x + dx; record.y = base.y + dy; placeNode(record);
+        const point = graph.positions[record.id];
+        if (point) { record.x = point.x; record.y = point.y; placeNode(record); }
+        else if (gesture && gesture.record === record && gesture.inlinePosition) {
+          const offset = manualOffsets[record.id] || { dx: 0, dy: 0 };
+          record.x = gesture.inlinePosition.x + offset.dx; record.y = gesture.inlinePosition.y + offset.dy; placeNode(record);
+        }
       }
     }
     function placeNode(record) { record.element.style.left = record.x + 'px'; record.element.style.top = record.y + 'px'; }
@@ -2168,11 +2205,9 @@
       if (flow === 'lr') { treeOut = 'right'; treeIn = 'left'; sketchOut = 'left'; sketchIn = 'right'; referenceIn = 'top'; }
       function output(parent) {
         const cluster = graph.clusters.find(item => item.id === parent.id);
-        const stacked = cluster ? cluster.reports.filter(report => {
-          const offset = manualOffsets[report.id]; return !offset || (!offset.dx && !offset.dy);
-        }).map(report => nodeRecords.get(report.id)) : [];
-        const lowest = [parent].concat(stacked).reduce((a, b) => a.y + a.height > b.y + b.height ? a : b);
-        return endpoint(lowest, 'bottom');
+        const geometry = GrillLayout.cluster({ node: parent, flow, manualOffsets,
+          reports: cluster ? cluster.reports.map(report => nodeRecords.get(report.id)) : [], refs: [] });
+        return endpoint(nodeRecords.get(geometry.outputId), 'bottom');
       }
       function socket(point, color, size, priority) {
         if (!point.record) return;
@@ -2412,7 +2447,7 @@
     }
     function discardInlineDrag(ended) {
       ended.record.element.remove(); nodeRecords.delete(ended.record.id);
-      delete manualOffsets[ended.record.id]; delete graph.positions[ended.record.id]; delete graph.parents[ended.record.id]; saveOffsets(); scheduleLines();
+      delete manualOffsets[ended.record.id]; saveOffsets(); applyOffsets(); scheduleLines();
     }
     function refByNodeId(id) { return currentUserRefs.find(ref => ref.nodeId === id); }
     canvas.addEventListener('pointerdown', event => {
@@ -2464,7 +2499,7 @@
         registerNode(id, card, { kind: 'reference', anchorId: '', parsedTarget: ref.parsedTarget, ref });
         const record = nodeRecords.get(id); record.width = card.offsetWidth; record.height = card.offsetHeight;
         record.x = point.x - 100; record.y = point.y - 40;
-        graph.positions[id] = { x: record.x, y: record.y }; graph.parents[id] = null;
+        gesture.inlinePosition = { x: record.x, y: record.y };
         delete manualOffsets[id]; gesture.record = record; gesture.offsetX = 0; gesture.offsetY = 0;
       }
       recordInteraction();
