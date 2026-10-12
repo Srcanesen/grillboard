@@ -1,38 +1,54 @@
 # GrillBoard
 
-An agent skill that interviews you about an idea in rounds you can answer by clicking on a live browser board, with a live sketch per option for look-and-layout questions alongside the decisions, references, research and spec.
+**A visual grilling skill for Claude Code and other AI coding agents.** The agent interviews you about your idea, and a live board in your browser turns your answers into a decision tree, sketches and a spec. You answer by clicking, not by typing.
 
-![A Recipe box interview building up on the live board](docs/demo.gif)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+![Dependencies: none](https://img.shields.io/badge/dependencies-none-blue.svg)
+![Python 3, standard library only](https://img.shields.io/badge/python-3%20stdlib%20only-blue.svg)
 
-## What it does
+![GrillBoard demo: an AI agent interviews the user about a recipe app while the decision tree, sketches, research and spec build up on a live browser board](docs/demo.gif)
 
-The agent asks the questions whose prerequisites are settled, waits for your answers on the board or in chat, then opens the next round. Click options on the board and press "Send answers" to answer a round; "Pick the recommendations" fills the recommended answers in one click. As you answer, the agent updates a session folder that the board reads about once a second.
+## Why
 
-- A decision tree shows settled answers, current questions and branches still waiting.
-- Rough HTML sketches show the thing being designed and update as decisions settle.
-- Look-and-layout questions can show a small live sketch of each option, so you choose by looking.
-- Pictures and links can be pinned as references, including by paste and drag-and-drop.
-- Live research notes show progress steps and findings, with reports you can open.
-- A spec panel collects decisions, architecture, research and open questions.
+A good interview before you build saves a rewrite later. But a long question-and-answer thread in a terminal is hard to follow: you lose track of what is decided, what depends on what, and what the thing will look like.
+
+GrillBoard keeps the interview method of Matt Pocock's [grilling skill](https://github.com/mattpocock/skills) and puts the whole interview on one board you can see:
+
+- **Answer by clicking.** Each round of questions shows its options on the board. Click, press "Send answers", and the next round arrives. "Pick the recommendations" takes the agent's suggestions in one click. Typing in chat still works.
+- **See the idea take shape.** A decision tree shows what is settled, what is being asked now and what still waits.
+- **Choose by looking.** For look-and-layout questions the agent draws a small live sketch for each option.
+- **Never lose a new question.** New questions arrive in place, without a page reload, and stay marked until you touch them.
+- **Bring your own material.** Paste or drop pictures and links onto the board as references for the next round.
+- **Research on the board.** Research notes show their progress live and end in a report you can open.
+- **Leave with a spec.** A spec panel collects the decisions, architecture, research and open questions. At the end the agent writes `spec.md`.
+
+![The finished GrillBoard zoomed out: every question settled, with the home screen sketch above the decision tree](docs/board.png)
 
 ## Requirements
 
 - An agent that loads `SKILL.md` skills. Developed and tried with Claude Code.
-- Python 3 for the board server; it uses only the standard library.
+- Python 3 for the board server. It uses only the standard library.
 - A browser.
 
 Without Python, the skill instructs the agent to open the copied `index.html` directly from disk: the board still updates from the session files, but answering on the board and adding references are off. The board and recording have been tried on macOS. Windows has not been tried yet.
 
 ## Install
 
-From the root of this checkout, copy the skill for every Claude Code project:
+Clone the repository:
+
+```sh
+git clone https://github.com/Srcanesen/grillboard.git
+cd grillboard
+```
+
+Then copy the skill for every Claude Code project:
 
 ```sh
 mkdir -p ~/.claude/skills
 cp -R skills/grillboard ~/.claude/skills/
 ```
 
-Or symlink it so changes in this checkout are picked up:
+Or symlink it, so that a `git pull` in this checkout updates the skill:
 
 ```sh
 mkdir -p ~/.claude/skills
@@ -91,7 +107,7 @@ rm -rf -- "$demo_dir"
 
 ## How it works
 
-The agent copies `viewer.html` into a session folder as `index.html`. `server.py` serves that folder locally, and the board reloads the session data without a page refresh.
+The agent and the board talk through plain files. The agent copies `viewer.html` into a session folder as `index.html`. `server.py` serves that folder locally, and the board reads the session data about once a second and updates in place.
 
 | Session file | Written by | Purpose |
 | --- | --- | --- |
@@ -104,6 +120,8 @@ The agent copies `viewer.html` into a session folder as `index.html`. `server.py
 
 The agent runs `server.py <session> --wait-answers` in the background to wait for a new answer batch in `user.js`; its JSON output wakes the agent where background commands support that. The agent applies the answers, settles those questions and sets `answered` in `session.js` to the batch id.
 
+The board is one self-contained HTML file with no build step, and the server is one Python file with no packages to install. [`docs/adr/`](docs/adr/) records why.
+
 ## Privacy
 
 The server listens only on `127.0.0.1` and uses no third-party packages. It serves files from the session folder and saves pasted or dropped images, reference metadata and sent answer batches there. Link references are stored as URLs; the server does not fetch their destinations. Its server-reuse check contacts its own loopback URL.
@@ -112,7 +130,7 @@ The board can load remote reference images and open external links supplied in t
 
 ## Development
 
-Run the tests with `node --test tests/board/*.test.mjs` and `python3 -m unittest discover -s tests/server`. Neither needs a package installed: the board tests load the pure `<script id="grill-session">` and `<script id="grill-camera">` blocks of `viewer.html` in Node, and the server tests start `server.py` in a temporary folder. `GLOSSARY.md` defines the project's words and `docs/adr/` records the decisions behind its shape.
+Run the tests with `node --test tests/board/*.test.mjs` and `python3 -m unittest discover -s tests/server`. Neither needs a package installed: the board tests load the pure script blocks of `viewer.html` (`grill-session`, `grill-camera`, `grill-layout` and `grill-changes`) in Node, and the server tests start `server.py` in a temporary folder. `GLOSSARY.md` defines the project's words and `docs/adr/` records the decisions behind its shape.
 
 Run `python3 tools/record_demo.py` to rebuild `docs/demo.gif` and `docs/board.png`; it needs Python Playwright, installed Google Chrome and ffmpeg on `PATH`. Edit the `STAGES` list to change the replay; it uses a temporary sample copy and illustrative closing answers, then stops its server and removes the copy.
 
