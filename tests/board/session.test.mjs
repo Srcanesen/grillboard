@@ -8,7 +8,7 @@ const session = loadBlock('grill-session', 'GrillSession');
 test('empty session has the documented defaults and empty derived collections', () => {
   assert.deepEqual(session.model({}, {}), {
     lang: '', title: '', idea: '', answered: '', status: '', labels: {}, refs: [], sketches: [], architecture: [], research: [], questions: [],
-    userRefs: [], boardRefs: [], optionPictures: [], questionsByStatus: { settled: [], asking: [], researching: [], waiting: [] }, questionsById: {}, openQuestions: [],
+    ideaNodeId: '@idea', userRefs: [], boardRefs: [], boardSketches: [], boardReports: [], optionPictures: [], questionsByStatus: { settled: [], asking: [], researching: [], waiting: [] }, questionsById: {}, openQuestions: [],
     researchByStatus: { todo: [], running: [], done: [] }, boardResearch: [], unfinishedResearch: [], pendingCount: 0
   });
 });
@@ -21,11 +21,11 @@ test('missing and malformed fields normalize without losing numeric ids', () => 
       recommendation: '', decision: '', answer: { option: null, text: '' }, validDependencies: [], research: [], optionPictures: {}, pending: false, pendingItem: null },
     { id: '', round: '', title: '', body: '', status: 'waiting', reopened: false, dependsOn: [], options: [], recommended: null,
       recommendation: '', decision: '', answer: { option: null, text: '' }, validDependencies: [],
-      research: [{ id: '', target: '', parsedTarget: { questionId: '', optionId: '' }, topic: '', status: 'todo', finding: '', report: '', sources: [] }],
+      research: [{ id: '', nodeId: 'research:', reportNodeId: 'report:', target: '', parsedTarget: { questionId: '', optionId: '' }, topic: '', status: 'todo', finding: '', report: '', sources: [] }],
       optionPictures: {}, pending: false, pendingItem: null }
   ]);
-  assert.deepEqual(model.sketches, [{ id: '', title: '', src: '', rev: 0, width: 1280, height: 800, note: '' }]);
-  assert.deepEqual(model.research, [{ id: '', target: '', parsedTarget: { questionId: '', optionId: '' }, topic: '', status: 'todo', finding: '', report: '', sources: [] }]);
+  assert.deepEqual(model.sketches, [{ id: '', nodeId: 'sketch:', title: '', src: '', rev: 0, width: 1280, height: 800, note: '' }]);
+  assert.deepEqual(model.research, [{ id: '', nodeId: 'research:', reportNodeId: 'report:', target: '', parsedTarget: { questionId: '', optionId: '' }, topic: '', status: 'todo', finding: '', report: '', sources: [] }]);
   assert.deepEqual(model.userRefs, [{ id: '', nodeId: 'ref:user:', src: '', target: '', parsedTarget: { questionId: '', optionId: '' }, caption: '', note: '', name: '', kind: '', user: true }]);
   assert.deepEqual([model.lang, model.labels, model.refs, model.architecture], ['', {}, [], []]);
 });
@@ -43,6 +43,18 @@ test('normalization bounds sketches, cleans sources and parses every target', ()
   assert.equal(model.research[0].target, 'q2:a');
   assert.deepEqual(model.research[0].parsedTarget, { questionId: 'q2', optionId: 'a' });
   assert.deepEqual(model.research[0].sources, [{ title: 'Safe', url: 'https://example.com/page' }]);
+});
+
+test('the model names the board nodes and keeps only sketches and reports with a usable source', () => {
+  const model = session.model({ sketches: [{ id: 'k1', src: 'sketches/k1.html' }, { id: 'k2', src: 'javascript:bad' }, { id: 'k3' }],
+    research: [{ id: 's1', status: 'done', report: 'research/s1.html' }, { id: 's2', status: 'done', report: 'javascript:bad' },
+      { id: 's3', status: 'running', report: 'research/s3.html' }] }, {}, { baseUrl: 'http://127.0.0.1:4181/' });
+  assert.equal(model.ideaNodeId, '@idea');
+  assert.deepEqual(model.sketches.map(sketch => sketch.nodeId), ['sketch:k1', 'sketch:k2', 'sketch:k3']);
+  assert.deepEqual(model.research.map(note => [note.nodeId, note.reportNodeId]),
+    [['research:s1', 'report:s1'], ['research:s2', 'report:s2'], ['research:s3', 'report:s3']]);
+  assert.deepEqual(model.boardSketches.map(sketch => sketch.nodeId), ['sketch:k1']);
+  assert.deepEqual(model.boardReports.map(note => note.reportNodeId), ['report:s1']);
 });
 
 const item = { question: 'q2', option: 'a', text: '' };

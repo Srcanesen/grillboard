@@ -382,7 +382,8 @@
        Each block defines one global. Tests load a block by its id: `node --test tests/board/*.test.mjs`. -->
   <script id="grill-session">
     // model(rawSession, rawUser, options = {}) -> normalized lang, title, idea, answered, status, labels, refs, sketches, architecture, research, questions;
-    // plus userRefs, boardRefs, optionPictures, questionsByStatus, questionsById, openQuestions, researchByStatus, boardResearch, unfinishedResearch, pendingCount.
+    // plus ideaNodeId, userRefs, boardRefs, boardSketches, boardReports, optionPictures, questionsByStatus, questionsById, openQuestions, researchByStatus, boardResearch, unfinishedResearch, pendingCount.
+    // Sketches hold nodeId; research notes hold nodeId and reportNodeId; boardSketches and boardReports are the sketches and done reports with a usable source.
     // Questions hold pending (boolean), pendingItem (batch item or null), validDependencies (ids), research (notes), optionPictures (option id -> reference); refs hold nodeId; refs/research keep raw target and parsedTarget.
     // boardRefs are usable standalone refs with anchorId (question/idea node id or ''); optionPictures lists the first usable picture per exact option target, agent refs before user refs, excluding waiting questions; boardResearch holds notes without a known question.
     // Groups preserve file order; lookups are objects; options.serverMode: false disables pending; options.baseUrl resolves reference sources (default https://grillboard.invalid/).
@@ -436,7 +437,7 @@
       function normalizeSketches(value) {
         return array(value).map(value => {
           const sketch = object(value);
-          return { id: string(sketch.id), title: string(sketch.title), src: string(sketch.src),
+          return { id: string(sketch.id), nodeId: nodeId('sketch', string(sketch.id)), title: string(sketch.title), src: string(sketch.src),
             rev: typeof sketch.rev === 'number' && Number.isFinite(sketch.rev) ? sketch.rev : 0,
             width: sketchDimension(sketch.width, 1280), height: sketchDimension(sketch.height, 800), note: string(sketch.note) };
         });
@@ -445,7 +446,8 @@
       function normalizeResearch(value) {
         return array(value).map(value => {
           const note = object(value);
-          return { id: string(note.id), target: string(note.target), parsedTarget: parseTarget(note.target), topic: string(note.topic),
+          return { id: string(note.id), nodeId: nodeId('research', string(note.id)), reportNodeId: nodeId('report', string(note.id)),
+            target: string(note.target), parsedTarget: parseTarget(note.target), topic: string(note.topic),
             status: ['todo', 'running', 'done'].includes(note.status) ? note.status : 'todo', finding: string(note.finding), report: string(note.report),
             sources: array(note.sources).map(value => {
               const source = object(value);
@@ -536,7 +538,9 @@
           for (const batch of batches) for (const item of array(batch.items).map(object)) if (asking.has(item.question)) pending.set(item.question, item);
         }
         for (const q of data.questions) { q.pending = q.status === 'asking' && pending.has(q.id); q.pendingItem = q.pending ? pending.get(q.id) : null; }
-        return { ...data, userRefs, boardRefs, optionPictures, questionsByStatus, questionsById,
+        return { ...data, ideaNodeId: nodeId('idea'), userRefs, boardRefs, optionPictures, questionsByStatus, questionsById,
+          boardSketches: data.sketches.filter(sketch => safeSource(sketch.src, options.baseUrl)),
+          boardReports: researchByStatus.done.filter(note => safeSource(note.report, options.baseUrl)),
           openQuestions: data.questions.filter(q => q.status !== 'settled'), researchByStatus, boardResearch,
           unfinishedResearch: data.research.filter(note => note.status !== 'done'), pendingCount: pending.size };
       }
@@ -1772,7 +1776,7 @@
     window.addEventListener('keydown', event => { if (event.key === 'Escape' && !lightbox.hidden) closeLightbox(); });
 
     // Nodes and the enlarged overlay share safe, revision-aware sketch frames.
-    function usableSketches() { return currentSession ? currentSession.sketches.filter(sketch => safeSource(sketch.src)) : []; }
+    function usableSketches() { return currentSession ? currentSession.boardSketches : []; }
     function sketchUrl(sketch) {
       const url = new URL(safeSource(sketch.src), sessionUrl);
       url.searchParams.set('rev', String(sketch.rev));
@@ -1907,14 +1911,6 @@
       const radioFocus = focused && focused.matches('[data-answer-option]') ? { id: focused.closest('.question-card').dataset.questionId, option: focused.dataset.answerOption } : null;
       const focusId = focused && focused.closest('.node') && focused.closest('.node').dataset.nodeId;
       currentSession = GrillSession.model(session, user, { serverMode, baseUrl: sessionUrl });
-      // Supply renderer-ready destinations and canonical ids missing from the session model.
-      currentSession.ideaNodeId = ideaId;
-      for (const sketch of currentSession.sketches) sketch.nodeId = GrillSession.nodeId('sketch', sketch.id);
-      for (const note of currentSession.research) {
-        note.nodeId = GrillSession.nodeId('research', note.id); note.reportNodeId = GrillSession.nodeId('report', note.id);
-      }
-      currentSession.boardSketches = usableSketches();
-      currentSession.boardReports = currentSession.researchByStatus.done.filter(note => safeSource(note.report));
       const changes = GrillChanges.between(previousSession, currentSession, { addedReferenceIds: pendingHighlights, idle: Date.now() - lastInteraction >= 10000 });
       previousSession = currentSession;
       for (const id of changes.consumedReferenceIds) pendingHighlights.delete(id);
@@ -1940,8 +1936,6 @@
       const dot = element('span', 'live-dot changed'); dot.setAttribute('role', 'img'); dot.setAttribute('aria-label', labels.live); progress.append(dot);
       header.replaceChildren(titleLine, element('p', 'idea-text', data.idea), progress);
       renderSpec(data, labels); spec.scrollTop = scrollTop;
-      const newSketches = changes.viewTarget && changes.viewTarget.kind === 'sketches' ? changes.viewTarget.nodeIds.slice(1) : [];
-      const newReports = changes.viewTarget && changes.viewTarget.kind === 'report' ? data.boardReports.filter(note => note.reportNodeId === changes.viewTarget.nodeIds[1]).slice(0, 1) : [];
       renderToolbar(); updateSpec();
       world.setAttribute('role', 'tree'); world.setAttribute('aria-label', data.title || labels.idea);
       hoveredQuestion = '';
@@ -2003,9 +1997,8 @@
       syncResearchSteps();
       if (firstRender) focusView(false);
       else if (changes.viewTarget) {
-        if (changes.viewTarget.kind === 'sketches') focusView(true, [ideaId].concat(newSketches));
-        else if (changes.viewTarget.kind === 'report') focusView(true, [Object.prototype.hasOwnProperty.call(questionsById, newReports[0].parsedTarget.questionId) ? newReports[0].parsedTarget.questionId : ideaId, GrillSession.nodeId('report', newReports[0].id)]);
-        else if (changes.viewTarget.kind === 'questions') focusView(true);
+        if (changes.viewTarget.kind === 'questions') focusView(true);
+        else focusView(true, changes.viewTarget.nodeIds);
       }
     }
     function registerNode(id, node, metadata) {
