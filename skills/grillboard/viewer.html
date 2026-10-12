@@ -72,11 +72,23 @@
     .question-card { flex: 1 1 240px; width: 280px; min-width: 0; max-width: 320px; }
     .question-card.asking { border: 2px solid var(--accent); box-shadow: var(--shadow); }
     .question-card.waiting { border-style: dashed; color: var(--muted); }
-    .question-card.unseen { animation: unseen-pulse 1.8s ease-in-out infinite; }
-    .question-card.unseen.highlight { animation: card-highlight 1.2s ease-out, unseen-pulse 1.8s ease-in-out 1.2s infinite; }
-    .question-card.unseen::after { content: attr(data-new-label); position: absolute; top: -11px; right: 12px; padding: 1px 8px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 700; line-height: 1.6; pointer-events: none; }
-    @keyframes unseen-pulse { 0%, 100% { box-shadow: var(--shadow), 0 0 0 0 transparent; } 50% { box-shadow: var(--shadow), 0 0 0 7px color-mix(in srgb, var(--accent) 40%, transparent); } }
-    @media (prefers-reduced-motion: reduce) { .question-card.unseen, .question-card.unseen.highlight { animation: none; box-shadow: var(--shadow), 0 0 0 4px color-mix(in srgb, var(--accent) 40%, transparent); } }
+    .question-card.unseen { animation: unseen-pulse 1.5s ease-in-out infinite; }
+    .question-card.unseen.highlight { animation: card-highlight 1.2s ease-out, unseen-pulse 1.5s ease-in-out infinite; }
+    .question-card.unseen .question-header { animation: unseen-header 1.5s ease-in-out infinite; }
+    #world.far .question-card.unseen { animation: unseen-pulse 1.5s ease-in-out infinite, unseen-fill 1.5s ease-in-out infinite; }
+    .question-card.unseen::after { content: attr(data-new-label); position: absolute; top: -1em; right: 12px; padding: .1em .8em; border-radius: 999px; background: var(--accent); color: var(--on-accent); border: 2px solid var(--card); font-size: clamp(12px, calc(11px / var(--z, 1)), 28px); font-weight: 700; line-height: 1.6; pointer-events: none; animation: unseen-label 1.5s ease-in-out infinite; }
+    #world.far .question-card.unseen::after { top: -2.1em; }
+    @keyframes unseen-pulse {
+      0%, 100% { box-shadow: var(--shadow), 0 0 0 0 transparent, 0 0 0 0 transparent; }
+      50% { box-shadow: var(--shadow), 0 0 0 max(5px, calc(4px / var(--z, 1))) color-mix(in srgb, var(--accent) 80%, transparent), 0 0 max(28px, calc(20px / var(--z, 1))) max(10px, calc(8px / var(--z, 1))) color-mix(in srgb, var(--accent) 45%, transparent); }
+    }
+    @keyframes unseen-header { 50% { background: color-mix(in srgb, var(--accent) 76%, var(--on-accent)); } }
+    @keyframes unseen-fill { 50% { background: var(--accent-tint); } }
+    @keyframes unseen-label { 50% { transform: scale(1.12); } }
+    @media (prefers-reduced-motion: reduce) {
+      .question-card.unseen, .question-card.unseen.highlight, #world.far .question-card.unseen { animation: none; box-shadow: var(--shadow), 0 0 0 max(5px, calc(4px / var(--z, 1))) color-mix(in srgb, var(--accent) 80%, transparent); }
+      .question-card.unseen .question-header, .question-card.unseen::after { animation: none; }
+    }
     .card-top { display: flex; align-items: flex-start; gap: 6px; }
     .badges { display: flex; flex-wrap: wrap; gap: 5px; }
     .badge { display: inline-block; padding: 2px 7px; border-radius: var(--radius-small); font-size: 11px; line-height: 1.5; color: var(--muted); background: var(--panel); }
