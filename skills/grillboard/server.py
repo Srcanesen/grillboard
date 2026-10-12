@@ -148,6 +148,20 @@ def read_user(root):
     return data
 
 
+def answer_id_number(value):
+    """An unrecognized batch id denotes no applied answers."""
+    match = ANSWER_ID.fullmatch(value)
+    return int(match[1]) if match else 0
+
+
+def answer_batches_after(data, after=""):
+    """Return batches newer than after, in numeric order (oldest first)."""
+    number = answer_id_number(after)
+    return sorted((batch for batch in data["answers"]
+                   if answer_id_number(batch["id"]) > number),
+                  key=lambda batch: answer_id_number(batch["id"]))
+
+
 def validate_items(items):
     if not isinstance(items, list) or not 1 <= len(items) <= 50:
         raise RequestError(400, "Expected 1–50 answers")
@@ -513,12 +527,10 @@ def wait_answers(root, args):
         print(json.dumps({"answers": [], "alreadyWaiting": True}), flush=True)
         return 3
     try:
-        after = int(args.after[1:]) if args.after else 0
         deadline = time.monotonic() + args.timeout_minutes * 60
         while not stopping.is_set():
             try:
-                batches = sorted((batch for batch in read_user(root)["answers"]
-                                  if int(batch["id"][1:]) > after), key=lambda batch: int(batch["id"][1:]))
+                batches = answer_batches_after(read_user(root), args.after)
             except (OSError, ValueError, TypeError, RecursionError):
                 batches = []
             if batches:

@@ -2,6 +2,7 @@
 """Replay the Recipe box board; requires Python Playwright, Chrome and ffmpeg."""
 
 import copy
+import importlib.util
 import json
 from pathlib import Path
 import shutil
@@ -78,6 +79,9 @@ STAGES = [
 ]
 
 ROOT = Path(__file__).resolve().parents[1]
+SERVER_SPEC = importlib.util.spec_from_file_location("grillboard_server", ROOT / "skills/grillboard/server.py")
+SERVER = importlib.util.module_from_spec(SERVER_SPEC)
+SERVER_SPEC.loader.exec_module(SERVER)
 DECISIONS = {
     "q4": "Members sign in with a shared family passcode.",
     "q5": "Anyone in the family can edit a recipe, with history.",
@@ -164,7 +168,7 @@ def action(page, item, recording, session, answered):
         try:
             page.get_by_role("button", name="Send answers", exact=True).click()
             page.locator(".question-card.pending").first.wait_for()
-            batch = read_assignment(session / "user.js")["answers"][-1]
+            batch = SERVER.answer_batches_after(SERVER.read_user(session.resolve()), answered)[-1]
             actual = {answer["question"]: {"option": answer["option"], "text": answer["text"]}
                       for answer in batch["items"]}
             assert actual == item["expected"], (actual, item["expected"])
