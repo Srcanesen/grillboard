@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title></title>
+  <link rel="icon" href="data:,">
   <style>
     /* Theme and page layout. */
     :root {
@@ -319,6 +320,33 @@
       .toolbar { bottom: 16px; }
     }
 
+    .option[role="radio"] { cursor: pointer; }
+    .option[role="radio"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .option.picked { border: 2px solid var(--accent); background: var(--accent-tint); box-shadow: inset 0 0 0 1px var(--accent); }
+    .pick-mark { color: var(--accent); font-weight: 700; }
+    .tiles .pick-mark { padding-left: 7px; }
+    .question-card.pending .option.picked { border-style: dashed; }
+    .question-card.pending .option { cursor: default; }
+    .answer-editor { display: block; width: 100%; min-height: 34px; max-height: 112px; padding: 7px 8px; margin-top: 10px; resize: none; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--card); font-size: 13px; line-height: 1.4; user-select: text; touch-action: auto; }
+    .answer-editor:focus { outline: 2px solid var(--accent); }
+    .answer-editor[readonly] { background: var(--panel); }
+    .accept-recommendation, .variant-open { margin-top: 6px; }
+    .variant-open { margin: 0 7px; font-size: 11px; }
+    .variant-preview { pointer-events: none; cursor: inherit; }
+    .variant-preview .sketch-frame { position: absolute; top: 0; left: 0; }
+    .variant-preview iframe { pointer-events: none; }
+    .round-bar { position: fixed; z-index: 5; left: 50%; transform: translateX(-50%); bottom: 16px; max-width: calc(100vw - 32px); padding: 10px 12px; display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 8px; font-size: 13px; }
+    .round-bar button, .accept-recommendation, .variant-open { border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--card); color: var(--text); padding: 6px 9px; }
+    .round-bar .send-answers { background: var(--accent); color: var(--card); border-color: var(--accent); font-weight: 600; }
+    .round-bar button:disabled { opacity: .5; cursor: default; }
+    .round-bar .round-count { border-color: transparent; background: transparent; }
+    .round-message, .round-error { flex-basis: 100%; text-align: center; }
+    .round-message { color: var(--muted); }
+    .round-message::before { content: '·'; display: inline-block; margin-right: 6px; animation: live-pulse 2s ease-in-out infinite; }
+    .round-error { color: var(--accent); }
+    @media (prefers-reduced-motion: reduce) { .round-message::before { animation: none; } }
+    @media (max-width: 899px) { .round-bar { width: calc(100vw - 32px); padding: 8px; gap: 6px; font-size: 12px; } }
+
     /* Keep the card shadows when a reference is dragged over them. */
     .idea-card.drop-target, .question-card.asking.drop-target { box-shadow: var(--shadow); }
 
@@ -341,6 +369,7 @@
       <button id="spec-toggle" type="button"></button>
       <div id="spec-content"></div>
     </aside>
+    <div id="round-bar" class="round-bar floating" hidden></div>
     <nav id="toolbar" class="toolbar floating"></nav>
   </div>
   <div id="warning" class="warning" role="status" hidden></div>
@@ -356,6 +385,10 @@
         flowTd: 'Flow: top-down. Switch to left to right.', flowLr: 'Flow: left to right. Switch to top-down.',
         idea: 'Idea', round: 'Round {n}', settled: 'Settled', asking: 'Asking now',
         researching: 'Researching', waiting: 'Waiting', reopened: 'Reopened',
+        ownAnswer: 'My own answer or a note', acceptRecommendation: 'Accept the recommendation',
+        roundAnswered: '{done} of {total} answered', pickRecommendations: 'Pick the recommendations',
+        sendAnswers: 'Send answers', sent: 'Sent', answersSent: 'Answers sent. The next round is on its way…',
+        remainingAnswers: '{count} unanswered', answerFailed: 'Could not send answers. Try again.', viewVariant: 'View larger',
         recommended: 'Recommended', answer: 'Answer', waitingOn: 'Waiting on',
         researchingHint: 'The agent is looking this up.', spec: 'Spec',
         specHint: 'Fills in as decisions settle.', decided: 'Decided',
@@ -379,6 +412,10 @@
         flowTd: 'Akış: yukarıdan aşağı. Soldan sağa çevir.', flowLr: 'Akış: soldan sağa. Yukarıdan aşağı çevir.',
         idea: 'Fikir', round: 'Tur {n}', settled: 'Kapandı', asking: 'Şu an soruluyor',
         researching: 'Araştırılıyor', waiting: 'Bekliyor', reopened: 'Yeniden açıldı',
+        ownAnswer: 'Kendi cevabım ya da notum', acceptRecommendation: 'Öneriyi kabul et',
+        roundAnswered: "{total} sorudan {done}'si cevaplandı", pickRecommendations: 'Önerileri seç',
+        sendAnswers: 'Cevapları gönder', sent: 'Gönderildi', answersSent: 'Cevaplar gönderildi. Sıradaki tur hazırlanıyor…',
+        remainingAnswers: '{count} soru cevapsız', answerFailed: 'Cevaplar gönderilemedi. Tekrar deneyin.', viewVariant: 'Büyüt',
         recommended: 'Öneri', answer: 'Cevap', waitingOn: 'Şunu bekliyor',
         researchingHint: 'Ajan bu konuyu araştırıyor.', spec: 'Spec',
         specHint: 'Kararlar netleştikçe tamamlanır.', decided: 'Karar verilenler',
@@ -419,7 +456,7 @@
       const source = object(value);
       return {
         lang: string(source.lang), title: string(source.title), idea: string(source.idea),
-        status: string(source.status), labels: object(source.labels), refs: normalizeRefs(source.refs, false),
+        answered: string(source.answered), status: string(source.status), labels: object(source.labels), refs: normalizeRefs(source.refs, false),
         sketches: normalizeSketches(source.sketches),
         architecture: Array.from(array(source.architecture), string), research: normalizeResearch(source.research),
         questions: Array.from(array(source.questions), value => {
@@ -432,7 +469,8 @@
             reopened: q.reopened === true, dependsOn: Array.from(array(q.dependsOn), string),
             options: Array.from(array(q.options), value => {
               const option = object(value);
-              return { id: string(option.id), label: string(option.label) };
+              return { id: string(option.id), label: string(option.label), sketch: string(option.sketch),
+                width: sketchDimension(option.width, 390), height: sketchDimension(option.height, 760) };
             }),
             recommended: q.recommended == null ? null : string(q.recommended),
             recommendation: string(q.recommendation), decision: string(q.decision),
@@ -442,13 +480,13 @@
       };
     }
     // Sketch geometry has bounded defaults; destinations are checked before rendering.
+    function sketchDimension(value, fallback) { return Math.max(200, Math.min(4000, typeof value === 'number' && Number.isFinite(value) ? value : fallback)); }
     function normalizeSketches(value) {
-      function dimension(value, fallback) { return Math.max(200, Math.min(4000, typeof value === 'number' && Number.isFinite(value) ? value : fallback)); }
       return array(value).map(value => {
         const sketch = object(value);
         return { id: string(sketch.id), title: string(sketch.title), src: string(sketch.src),
           rev: typeof sketch.rev === 'number' && Number.isFinite(sketch.rev) ? sketch.rev : 0,
-          width: dimension(sketch.width, 1280), height: dimension(sketch.height, 800), note: string(sketch.note) };
+          width: sketchDimension(sketch.width, 1280), height: sketchDimension(sketch.height, 800), note: string(sketch.note) };
       });
     }
     // Research sources accept only complete HTTP(S) URLs, never relative destinations.
@@ -810,6 +848,17 @@
     let nodeResize = null;
     let currentSession = null;
     let currentUserRefs = [];
+    const answerDrafts = new Map();
+    let pendingAnswers = new Map();
+    let sendingAnswers = false;
+    let answerError = '';
+    const roundBar = document.getElementById('round-bar');
+    const variantObserver = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        const preview = entry.target, variant = preview.variant;
+        if (variant) sizeSketchFrame(variant.frame, variant.surface, variant.sketch, entry.contentRect.width / variant.sketch.width);
+      }
+    });
     let currentLabels = sessionLabels({ lang: '', labels: {} });
     let previousStatuses = new Map();
     let previousResearchStatuses = new Map();
@@ -864,6 +913,96 @@
       toastTimer = setTimeout(() => { toastNode.hidden = true; }, 2500);
     }
 
+    function batchNumber(id) { const match = /^a([1-9][0-9]*)$/.exec(id || ''); return match ? Number(match[1]) : 0; }
+    function draftFor(id) { if (!answerDrafts.has(id)) answerDrafts.set(id, { option: null, text: '' }); return answerDrafts.get(id); }
+    function hasAnswer(answer) { return !!answer && (answer.option !== null || !!answer.text.trim()); }
+    function syncAnswers() {
+      const asking = new Set(currentSession.questions.filter(q => q.status === 'asking').map(q => q.id));
+      for (const id of answerDrafts.keys()) if (!asking.has(id)) answerDrafts.delete(id);
+      pendingAnswers = new Map();
+      if (!serverMode) return;
+      const batches = array(object(latestUser).answers).filter(batch => batchNumber(batch.id) > batchNumber(currentSession.answered))
+        .sort((a, b) => batchNumber(a.id) - batchNumber(b.id));
+      for (const batch of batches) for (const item of array(batch.items)) if (asking.has(item.question)) pendingAnswers.set(item.question, item);
+    }
+    function growAnswer(editor) { editor.style.height = 'auto'; editor.style.height = Math.min(112, Math.max(34, editor.scrollHeight)) + 'px'; }
+    function refreshAnswerControls() {
+      for (const q of currentSession.questions.filter(q => q.status === 'asking')) {
+        const card = cardNodes.get(q.id); if (!card) continue;
+        const answer = pendingAnswers.get(q.id) || draftFor(q.id);
+        const rows = [...card.querySelectorAll('[data-answer-option]')];
+        for (const row of rows) {
+          const picked = row.dataset.answerOption === answer.option;
+          row.classList.toggle('picked', picked); row.setAttribute('aria-checked', String(picked));
+          row.setAttribute('aria-disabled', String(pendingAnswers.has(q.id) || sendingAnswers));
+          row.tabIndex = !pendingAnswers.has(q.id) && (picked || (answer.option === null && row === rows[0])) ? 0 : -1;
+          row.querySelector('.pick-mark').hidden = !picked;
+        }
+        const editor = card.querySelector('.answer-editor');
+        if (editor) { if (editor.value !== answer.text) editor.value = answer.text; editor.readOnly = pendingAnswers.has(q.id) || sendingAnswers; growAnswer(editor); }
+        const accept = card.querySelector('.accept-recommendation'); if (accept) accept.disabled = sendingAnswers;
+      }
+      renderRoundBar(); measureAndLayout();
+    }
+    function chooseAnswer(question, option) {
+      if (sendingAnswers || pendingAnswers.has(question)) return;
+      const answer = draftFor(question); answer.option = answer.option === option ? null : option;
+      answerError = ''; recordInteraction(); refreshAnswerControls();
+    }
+    function renderRoundBar() {
+      const asking = currentSession ? currentSession.questions.filter(q => q.status === 'asking') : [];
+      const open = asking.filter(q => !pendingAnswers.has(q.id));
+      roundBar.hidden = !serverMode || !asking.length;
+      roundBar.replaceChildren(); if (roundBar.hidden) return;
+      if (pendingAnswers.size) roundBar.append(element('div', 'round-message', currentLabels.answersSent));
+      if (open.length) {
+        const done = open.filter(q => hasAnswer(draftFor(q.id))).length;
+        const count = button(interpolate(currentLabels.roundAnswered, { done, total: open.length }), currentLabels.focusRound, () => {
+          const unanswered = open.filter(q => !hasAnswer(draftFor(q.id)));
+          const next = unanswered[(unanswered.findIndex(q => q.id === selectedQuestion) + 1) % unanswered.length];
+          if (next) { recordInteraction(); selectQuestion(next.id); focusView(false, [next.id]); }
+        }, 'round-count');
+        roundBar.append(count);
+        if (pendingAnswers.size) roundBar.append(element('span', '', interpolate(currentLabels.remainingAnswers, { count: open.length - done })));
+        const pick = button(currentLabels.pickRecommendations, currentLabels.pickRecommendations, () => {
+          for (const q of open) {
+            const answer = draftFor(q.id); if (hasAnswer(answer)) continue;
+            if (q.options.some(option => option.id === q.recommended)) answer.option = q.recommended;
+            else if (q.recommendation) answer.text = q.recommendation.slice(0, 2000);
+          }
+          answerError = ''; refreshAnswerControls();
+        });
+        pick.disabled = sendingAnswers;
+        const send = button(currentLabels.sendAnswers, currentLabels.sendAnswers, sendRoundAnswers, 'send-answers');
+        send.disabled = sendingAnswers || !done; roundBar.append(pick, send);
+      }
+      if (answerError) { const error = element('div', 'round-error', answerError); error.setAttribute('role', 'alert'); roundBar.append(error); }
+      updateFloatingControls();
+    }
+    async function sendRoundAnswers() {
+      if (sendingAnswers) return;
+      const items = currentSession.questions.filter(q => q.status === 'asking' && !pendingAnswers.has(q.id) && hasAnswer(draftFor(q.id)))
+        .map(q => ({ question: q.id, ...draftFor(q.id) }));
+      if (!items.length) return;
+      sendingAnswers = true; answerError = ''; refreshAnswerControls();
+      try {
+        const result = await apiRequest('api/answers', 'POST', { items });
+        await loadFiles();
+        const user = object(latestUser);
+        if (!array(user.answers).some(batch => batch.id === result.batch.id)) latestUser = { ...user, answers: array(user.answers).concat(result.batch) };
+        // Sent drafts belong to this batch; advancing answered must expose a fresh input.
+        for (const item of items) answerDrafts.delete(item.question);
+        lastRenderedJson = null; renderLatest();
+      } catch (_) { answerError = currentLabels.answerFailed; }
+      finally { sendingAnswers = false; refreshAnswerControls(); }
+    }
+    function variantSketch(q, option) {
+      if (!option.sketch || !safeSource(option.sketch)) return null;
+      const url = new URL(option.sketch, sessionUrl), base = new URL('.', sessionUrl);
+      if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname) || !/\.html?$/i.test(url.pathname)) return null;
+      return { id: q.id + ':' + option.id, title: option.label, src: option.sketch, width: option.width, height: option.height, rev: 0 };
+    }
+
     // Questions lead each card; detail and research disclosure stay in memory.
     function questionLabel(q, labels) {
       const match = /^q([0-9]+)$/i.exec(q.id);
@@ -874,7 +1013,12 @@
     }
     function questionCard(q, labels, questionsById, pictures, researchNotes) {
       const card = element('article', 'question-card ' + q.status);
-      const tiled = q.options.some(option => pictures.has(q.id + ':' + option.id));
+      const pending = serverMode && q.status === 'asking' && pendingAnswers.get(q.id);
+      const editable = serverMode && q.status === 'asking' && !pending;
+      const interactive = editable || !!pending;
+      const answer = pending || (editable ? draftFor(q.id) : q.answer);
+      if (pending) card.classList.add('pending');
+      const tiled = q.options.some(option => variantSketch(q, option) || pictures.has(q.id + ':' + option.id));
       if (tiled) card.classList.add('picture-options');
       card.classList.toggle('compact', q.status === 'settled' && !expandedCards.has(q.id));
       card.tabIndex = 0; card.setAttribute('role', 'treeitem');
@@ -888,6 +1032,7 @@
       const body = element('div', 'question-body');
       const badges = element('div', 'badges'); badges.append(element('span', 'question-id', questionLabel(q, labels)));
       if (q.status !== 'settled') badges.append(statusBadge(q.status, labels));
+      if (pending) badges.append(element('span', 'badge', labels.sent));
       if (q.reopened) badges.append(element('span', 'badge reopened', labels.reopened));
       top.append(badges);
       heading.append(top, element('h3', 'question-title', q.title)); card.append(heading, body);
@@ -917,13 +1062,44 @@
         if (q.body) details.append(element('p', 'body', q.body));
         if (q.options.length) {
           const options = element('ul', 'options' + (tiled ? ' tiles' : ''));
+          if (interactive) { options.setAttribute('role', 'radiogroup'); options.setAttribute('aria-label', q.title); }
           for (const option of q.options) {
             const chosen = q.status === 'settled' && q.answer.option !== null && q.answer.option === option.id;
             const row = element('li', 'option' + (chosen ? ' chosen' : q.status === 'settled' ? ' dimmed' : ''));
+            if (interactive) {
+              row.dataset.answerOption = option.id; row.setAttribute('role', 'radio');
+              row.setAttribute('aria-label', option.label); row.setAttribute('aria-disabled', String(!!pending || sendingAnswers));
+              row.setAttribute('aria-checked', String(answer.option === option.id));
+              row.classList.toggle('picked', answer.option === option.id);
+              row.tabIndex = editable && (answer.option === option.id || (answer.option === null && option === q.options[0])) ? 0 : -1;
+              row.addEventListener('keydown', event => {
+                if (!editable || sendingAnswers || event.target !== row) return;
+                if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+                  event.preventDefault(); event.stopPropagation();
+                  const rows = [...options.querySelectorAll('[role="radio"]')], delta = ['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 1;
+                  const next = rows[(rows.indexOf(row) + delta + rows.length) % rows.length];
+                  for (const item of rows) item.tabIndex = item === next ? 0 : -1;
+                  next.focus({ preventScroll: true });
+                } else if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); chooseAnswer(q.id, option.id); }
+              });
+              row.addEventListener('click', event => { if (event.detail === 0 && event.target === row && editable) chooseAnswer(q.id, option.id); });
+            }
             if (tiled) {
               const ref = pictures.get(q.id + ':' + option.id);
-              const visual = ref ? picture(ref, 'tile-picture') : element('div', 'tile-picture empty-picture');
+              const variant = variantSketch(q, option);
+              let visual;
+              if (variant) {
+                visual = element('div', 'tile-picture variant-preview'); visual.style.aspectRatio = variant.width + ' / ' + variant.height;
+                const embedded = createSketchFrame(variant); visual.append(embedded.frame);
+                visual.variant = { ...embedded, sketch: variant }; variantObserver.observe(visual);
+              } else if (ref && interactive) {
+                visual = element('div', 'tile-picture'); const img = element('img');
+                img.src = new URL(ref.src, sessionUrl).href; img.alt = option.label; img.draggable = false; visual.append(img);
+              } else visual = ref ? picture(ref, 'tile-picture') : element('div', 'tile-picture empty-picture');
               row.append(visual);
+              if (variant || (ref && interactive)) row.append(button(labels.viewVariant, labels.viewVariant, () => {
+                if (variant) showEnlargedSketch(variant); else openLightbox(ref);
+              }, 'variant-open'));
               if (ref && ref.user) {
                 row.append(element('span', 'badge yours', labels.yours));
                 if (serverMode) addReferenceControls(row, ref);
@@ -935,6 +1111,7 @@
               check.setAttribute('aria-hidden', 'true');
               row.append(check);
             }
+            if (interactive) { const mark = element('span', 'pick-mark', '●'); mark.setAttribute('aria-hidden', 'true'); mark.hidden = answer.option !== option.id; row.append(mark); }
             row.append(element('span', 'option-label', option.label));
             if (q.recommended !== null && option.id === q.recommended) row.append(element('span', 'recommended-tag', labels.recommended));
             options.append(row);
@@ -942,7 +1119,17 @@
           details.append(options);
         }
         if (q.recommendation) details.append(element('p', 'note', labels.recommended + ': ' + q.recommendation));
-        if (q.answer.text) details.append(element('p', 'answer-text' + (q.answer.option === null ? ' chosen' : ''), labels.answer + ': ' + q.answer.text));
+        if (interactive) {
+          const editor = element('textarea', 'answer-editor'); editor.rows = 1; editor.maxLength = 2000;
+          editor.value = answer.text; editor.placeholder = labels.ownAnswer; editor.setAttribute('aria-label', labels.ownAnswer);
+          editor.readOnly = !!pending || sendingAnswers; editor.dataset.answerQuestion = q.id;
+          editor.addEventListener('input', () => { draftFor(q.id).text = editor.value; growAnswer(editor); answerError = ''; renderRoundBar(); measureAndLayout(); });
+          details.append(editor);
+          if (editable && !q.options.length && q.recommendation) details.append(button(labels.acceptRecommendation, labels.acceptRecommendation, () => {
+            draftFor(q.id).text = q.recommendation.slice(0, 2000); refreshAnswerControls(); editor.focus({ preventScroll: true });
+          }, 'accept-recommendation'));
+        }
+        if (!interactive && q.answer.text) details.append(element('p', 'answer-text' + (q.answer.option === null ? ' chosen' : ''), labels.answer + ': ' + q.answer.text));
         if (q.status === 'researching') details.append(element('p', 'note', labels.researchingHint));
         body.append(details);
       } else {
@@ -1426,6 +1613,9 @@
     // Enlarged sketches share the lightbox's backdrop, close button, and Escape handling.
     function openEnlargedSketch(id) {
       const sketch = usableSketches().find(sketch => sketch.id === id); if (!sketch) return;
+      showEnlargedSketch(sketch);
+    }
+    function showEnlargedSketch(sketch) {
       focusBeforeLightbox = document.activeElement;
       const embedded = createSketchFrame(sketch);
       const title = element('h2', '', sketch.title);
@@ -1453,10 +1643,13 @@
       const firstRender = currentSession === null;
       const scrollTop = spec.scrollTop;
       const focused = document.activeElement;
+      const answerFocus = focused && focused.matches('.answer-editor') ? { id: focused.dataset.answerQuestion, start: focused.selectionStart, end: focused.selectionEnd } : null;
+      const radioFocus = focused && focused.matches('[data-answer-option]') ? { id: focused.closest('.question-card').dataset.questionId, option: focused.dataset.answerOption } : null;
       const focusId = focused && focused.closest('.node') && focused.closest('.node').dataset.nodeId;
       currentSession = normalizeSession(session);
       currentUserRefs = normalizeRefs(userRefs, true);
       currentLabels = sessionLabels(currentSession);
+      syncAnswers(); variantObserver.disconnect();
       const data = currentSession;
       const labels = currentLabels;
       stepViews = new Map();
@@ -1553,8 +1746,17 @@
       }
       previousReports = new Set(reports.map(note => note.id));
       for (const sketch of usableSketches()) updateSketchNode(sketch, changedSketches.has(sketch.id));
+      for (const editor of world.querySelectorAll('.answer-editor')) growAnswer(editor);
       saveNodeSizes(); measureAndLayout(); selectQuestion(selectedQuestion);
-      if (focusId && nodeRecords.has(focusId)) nodeRecords.get(focusId).element.focus({ preventScroll: true });
+      if (focusId && nodeRecords.has(focusId)) {
+        const node = nodeRecords.get(focusId).element;
+        const editor = answerFocus && node.querySelector('.answer-editor');
+        const radio = radioFocus && [...node.querySelectorAll('[data-answer-option]')].find(row => row.dataset.answerOption === radioFocus.option);
+        if (editor && !editor.readOnly) { editor.focus({ preventScroll: true }); editor.setSelectionRange(answerFocus.start, answerFocus.end); }
+        else if (radio && radio.getAttribute('aria-disabled') !== 'true') radio.focus({ preventScroll: true });
+        else node.focus({ preventScroll: true });
+      }
+      renderRoundBar();
       syncResearchSteps();
       if (firstRender) focusView(false);
       else if (Date.now() - lastInteraction >= 10000) {
@@ -1926,6 +2128,7 @@
         if (narrow) bottom = specPanel.getBoundingClientRect().top;
         else right = specPanel.getBoundingClientRect().left;
       }
+      if (!roundBar.hidden) bottom = Math.min(bottom, roundBar.getBoundingClientRect().top - 8);
       return { x: 0, y, width: Math.max(1, right), height: Math.max(1, bottom - y) };
     }
     function underHeader(records, target) {
@@ -2045,6 +2248,15 @@
     function updateFloatingControls() {
       const bottom = window.innerWidth < 900 && !specCollapsed ? window.innerHeight - specPanel.getBoundingClientRect().top + 8 : 16;
       toolbar.style.bottom = bottom + 'px';
+      if (window.innerWidth < 900) {
+        roundBar.style.left = '50%'; roundBar.style.bottom = (bottom + toolbar.getBoundingClientRect().height + 8) + 'px';
+      } else {
+        const right = specCollapsed ? window.innerWidth : specPanel.getBoundingClientRect().left;
+        const left = toolbar.getBoundingClientRect().right + 12;
+        roundBar.style.left = ((left + right) / 2) + 'px'; roundBar.style.bottom = '16px';
+        roundBar.style.maxWidth = Math.max(200, right - left - 16) + 'px';
+      }
+      if (window.innerWidth < 900) roundBar.style.maxWidth = '';
     }
     function updateSpec() {
       specPanel.classList.toggle('collapsed', specCollapsed);
@@ -2094,7 +2306,7 @@
         connection = { pointerId: event.pointerId, record, point: worldPoint(event.clientX, event.clientY) };
         scheduleLines(); return;
       }
-      if (event.target.closest('textarea, input, a, .delete-ref, .ref-note, .disconnect-ref, .details-toggle, .research-chip, .node-resize')) return;
+      if (event.target.closest('textarea, input, a, .delete-ref, .ref-note, .disconnect-ref, .details-toggle, .research-chip, .node-resize, .variant-open, .accept-recommendation')) return;
       cancelGlide(); event.preventDefault();
       pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
       canvas.setPointerCapture(event.pointerId);
@@ -2106,7 +2318,7 @@
       gesture = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: view.x, y: view.y,
         record, offsetX: record && manualOffsets[record.id] ? manualOffsets[record.id].dx : 0,
         offsetY: record && manualOffsets[record.id] ? manualOffsets[record.id].dy : 0, dragged: false, inlineRef,
-        question: node && node.dataset.questionId, picture: event.target.closest('[data-picture]') };
+        answerControl: event.target.closest('[data-answer-option]'), question: node && node.dataset.questionId, picture: event.target.closest('[data-picture]') };
       if (record) record.element.focus({ preventScroll: true });
     });
     canvas.addEventListener('pointermove', event => {
@@ -2190,7 +2402,10 @@
         selectQuestion(ended.question || '');
         if (ended.record && ended.record.kind === 'report') openReader(ended.record.note.id);
         if (ended.record && ended.record.kind === 'sketch') openEnlargedSketch(ended.record.element.dataset.sketchId);
-        if (ended.picture) { suppressClickUntil = Date.now() + 500; openLightbox(ended.picture.pictureReference); }
+        if (ended.answerControl) {
+          suppressClickUntil = Date.now() + 500; chooseAnswer(ended.question, ended.answerControl.dataset.answerOption);
+          if (ended.answerControl.isConnected) ended.answerControl.focus({ preventScroll: true });
+        } else if (ended.picture) { suppressClickUntil = Date.now() + 500; openLightbox(ended.picture.pictureReference); }
       }
       renderLatest();
     }
@@ -2212,7 +2427,7 @@
     function cardTargetAt(x, y, includeIdea, excludeId) {
       if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return '';
       const top = document.elementFromPoint(x, y);
-      if (top && top.closest('#spec-panel, #toolbar, #lightbox, #reader')) return '';
+      if (top && top.closest('#spec-panel, #toolbar, #round-bar, #lightbox, #reader')) return '';
       const point = worldPoint(x, y);
       const ids = [...cardNodes.keys()].reverse(); if (includeIdea) ids.push(ideaId);
       for (const id of ids) {
@@ -2358,7 +2573,7 @@
         do {
           reloadRequested = false;
           const [session, user] = await Promise.all([readScript(sessionUrl, '__GRILL__'), readScript(userUrl, '__GRILL_USER__')]);
-          latestUser = user; latestUserRefs = user ? array(user.refs) : [];
+          if (user) { latestUser = user; latestUserRefs = array(user.refs); }
           if (session) { latestSession = session; failedReads = 0; warning.hidden = true; }
           else {
             failedReads++;

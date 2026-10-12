@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve a grilling board and persist its user references (standard library only)."""
+"""Serve a grilling board and persist user references and answers (standard library only)."""
 
 import argparse
 from contextlib import contextmanager
@@ -23,6 +23,8 @@ from urllib.request import ProxyHandler, build_opener
 PREFIX = "window.__GRILL_USER__ = "
 MAX_BODY = 15 * 1024 * 1024
 TARGET = re.compile(r"[A-Za-z0-9_-]{1,40}(:[A-Za-z0-9_-]{1,40})?")
+ANSWER_ID = re.compile(r"a([1-9][0-9]*)")
+ITEM_ID = re.compile(r"[A-Za-z0-9_-]{1,40}")
 REF_ID = re.compile(r"u([1-9][0-9]*)")
 IMAGES = {"image/png": "png", "image/jpeg": "jpg",
           "image/gif": "gif", "image/webp": "webp"}
@@ -102,7 +104,7 @@ def process_lock(root, name, blocking=True):
 def read_user(root):
     path = inside(root, root / "user.js")
     if not path.exists():
-        return {"version": 1, "refs": [], "nextId": 1}
+        return {"version": 1, "refs": [], "nextId": 1, "answers": [], "nextAnswerId": 1}
     text = path.read_text(encoding="utf-8")
     if not text.startswith(PREFIX) or not text.rstrip().endswith(";"):
         raise ValueError("Invalid user.js")
@@ -121,7 +123,47 @@ def read_user(root):
     if type(counter) is not int or counter < 1:
         raise ValueError("Invalid counter in user.js")
     data["nextId"] = max(counter, highest + 1)
+    answers = data.get("answers", [])
+    if not isinstance(answers, list):
+        raise ValueError("Invalid answers in user.js")
+    highest = 0
+    seen = set()
+    for batch in answers:
+        match = ANSWER_ID.fullmatch(batch.get("id", "")) if isinstance(batch, dict) and isinstance(batch.get("id"), str) else None
+        if (match is None or batch["id"] in seen or set(batch) != {"id", "sent", "items"}
+                or not isinstance(batch["sent"], str)):
+            raise ValueError("Invalid answer batch in user.js")
+        try:
+            datetime.strptime(batch["sent"], "%Y-%m-%dT%H:%M:%SZ")
+            validate_items(batch["items"])
+        except (ValueError, RequestError):
+            raise ValueError("Invalid answer batch in user.js") from None
+        seen.add(batch["id"])
+        highest = max(highest, int(match[1]))
+    counter = data.get("nextAnswerId", highest + 1)
+    if type(counter) is not int or counter < 1:
+        raise ValueError("Invalid answer counter in user.js")
+    data["answers"] = answers
+    data["nextAnswerId"] = max(counter, highest + 1)
     return data
+
+
+def validate_items(items):
+    if not isinstance(items, list) or not 1 <= len(items) <= 50:
+        raise RequestError(400, "Expected 1–50 answers")
+    seen = set()
+    for item in items:
+        if not isinstance(item, dict) or set(item) != {"question", "option", "text"}:
+            raise RequestError(400, "Expected question, option and text")
+        question, option, text = item["question"], item["option"], item["text"]
+        if not isinstance(question, str) or not ITEM_ID.fullmatch(question) or question in seen:
+            raise RequestError(400, "Bad or duplicate question")
+        seen.add(question)
+        if option is not None and (not isinstance(option, str) or not ITEM_ID.fullmatch(option)):
+            raise RequestError(400, "Bad option")
+        if not isinstance(text, str) or len(text) > 2000 or (option is None and not text.strip()):
+            raise RequestError(400, "Bad or empty answer text")
+    return items
 
 
 def write_user(root, data):
@@ -228,6 +270,8 @@ class BoardHandler(BaseHTTPRequestHandler):
             if self.is_api():
                 if path == "/api/ping" and self.command == "GET":
                     self.json_response(200, {"ok": True, "board": 1})
+                elif path == "/api/answers" and self.command == "POST":
+                    self.add_answers()
                 elif path == "/api/refs" and self.command == "POST":
                     self.add_ref()
                 elif path.startswith("/api/refs/") and self.command in ("POST", "DELETE"):
@@ -242,6 +286,21 @@ class BoardHandler(BaseHTTPRequestHandler):
             self.send_error(error.status, error.message)
         except (OSError, ValueError, TypeError, RecursionError):
             self.send_error(500, "Could not read or save session")
+
+    def add_answers(self):
+        data = self.json_body()
+        if set(data) != {"items"}:
+            raise RequestError(400, "Expected items only")
+        items = validate_items(data["items"])
+        with self.server.user_lock:
+            data = read_user(self.server.root)
+            batch = {"id": f"a{data['nextAnswerId']}",
+                     "sent": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                     "items": items}
+            data["nextAnswerId"] += 1
+            data["answers"].append(batch)
+            write_user(self.server.root, data)
+        self.json_response(200, {"ok": True, "batch": batch})
 
     def add_ref(self):
         content_type = self.headers.get_content_type()
@@ -435,10 +494,54 @@ def serve(root, args):
     return 0
 
 
+def wait_answers(root, args):
+    stopping = threading.Event()
+    def stop(signum, frame):
+        stopping.set()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, stop)
+    # Acquire separately so a file-read error is not mistaken for a busy lock.
+    lock = process_lock(root, ".wait.lock", blocking=False)
+    try:
+        lock.__enter__()
+    except BlockingIOError:
+        print(json.dumps({"answers": [], "alreadyWaiting": True}), flush=True)
+        return 3
+    except OSError as error:
+        if os.name != "nt" or error.errno not in (13, 36):
+            raise
+        print(json.dumps({"answers": [], "alreadyWaiting": True}), flush=True)
+        return 3
+    try:
+        after = int(args.after[1:]) if args.after else 0
+        deadline = time.monotonic() + args.timeout_minutes * 60
+        while not stopping.is_set():
+            try:
+                batches = sorted((batch for batch in read_user(root)["answers"]
+                                  if int(batch["id"][1:]) > after), key=lambda batch: int(batch["id"][1:]))
+            except (OSError, ValueError, TypeError, RecursionError):
+                batches = []
+            if batches:
+                print(json.dumps({"answers": batches}, ensure_ascii=False), flush=True)
+                return 0
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                print(json.dumps({"answers": [], "timeout": True}), flush=True)
+                return 2
+            stopping.wait(min(0.5, remaining))
+        return 0
+    finally:
+        lock.__exit__(None, None, None)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("session_dir")
-    parser.add_argument("--serve", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--serve", action="store_true")
+    modes.add_argument("--wait-answers", action="store_true")
+    parser.add_argument("--after", default="")
+    parser.add_argument("--timeout-minutes", type=float, default=120)
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--idle-minutes", type=float, default=30)
     args = parser.parse_args()
@@ -447,7 +550,13 @@ def main():
         parser.error("session_dir must be an existing directory")
     if not 0 <= args.port <= 65535 or not 0 < args.idle_minutes < float("inf"):
         parser.error("port must be 0–65535 and idle-minutes must be positive and finite")
+    if args.after and not ANSWER_ID.fullmatch(args.after):
+        parser.error("after must be an answer batch id such as a3")
+    if not 0 < args.timeout_minutes < float("inf"):
+        parser.error("timeout-minutes must be positive and finite")
     try:
+        if args.wait_answers:
+            return wait_answers(root, args)
         return serve(root, args) if args.serve else launch(root, args)
     except (OSError, ValueError) as error:
         print(f"Board server: {error}", file=sys.stderr)

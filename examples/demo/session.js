@@ -4,6 +4,7 @@ window.__GRILL__ = {
   "title": "Recipe box",
   "idea": "A small app where a family keeps and shares its recipes.",
   "status": "active",
+  "answered": "",
   "architecture": [
     "A web app that also works on a phone browser.",
     "One SQLite file holds recipes and members.",
@@ -158,9 +159,9 @@ window.__GRILL__ = {
       "dependsOn": ["q1", "q3"],
       "status": "asking",
       "options": [
-        { "id": "a", "label": "A plain list" },
-        { "id": "b", "label": "A grid of photos" },
-        { "id": "c", "label": "One featured recipe" }
+        { "id": "a", "label": "A plain list", "sketch": "sketch/q8-a.html", "width": 390, "height": 760 },
+        { "id": "b", "label": "A grid of photos", "sketch": "sketch/q8-b.html", "width": 390, "height": 760 },
+        { "id": "c", "label": "One featured recipe", "sketch": "sketch/q8-c.html", "width": 390, "height": 760 }
       ],
       "recommended": "b",
       "recommendation": "",

@@ -35,22 +35,27 @@ The session is done when the frontier is empty: every branch of the design tree 
 
 ## The board
 
-The board is `viewer.html` (beside this file) reading a **session file**. It re-reads the session file about once a second, so every save shows up without a reload. `server.py` (also beside this file) serves the board and lets the user paste and drop references onto it.
+The board is `viewer.html` (beside this file) reading a **session file**. It re-reads the session file about once a second, so every save shows up without a reload. `server.py` (also beside this file) serves the board and lets the user answer questions and paste and drop references onto it.
 
 **Start**, once, before round 1:
 
 1. Create `.grill/<slug>/` in the working directory, where `<slug>` is a short kebab-case name for the topic.
 2. Copy `viewer.html` there as `index.html`.
 3. Write `.grill/<slug>/session.js` with the idea alone: the board opens on the idea, and the nodes arrive as the interview goes.
-4. Run `python3 <this skill's folder>/server.py .grill/<slug>`. It prints the board URL and keeps serving in the background. Open that URL where the user can watch it beside the chat (a browser or preview pane tool when you have one, otherwise the OS opener: `open`, `xdg-open`, `start`) and give the user the URL. Without Python 3, open `index.html` from disk: the board still updates live, and adding references is off.
+4. Run `python3 <this skill's folder>/server.py .grill/<slug>`. It prints the board URL and keeps serving in the background. Open that URL where the user can watch it beside the chat (a browser or preview pane tool when you have one, otherwise the OS opener: `open`, `xdg-open`, `start`) and give the user the URL. Without Python 3, open `index.html` from disk: the board still updates live, and answering on the board and adding references are off.
 
-**Every round**: save the session file first, then send the round in the chat, so the board and the chat always show the same state. When a reply arrives:
+**Every round**: save the session file first, then send the round in the chat, so the board and the chat always show the same state. Tell the user in one line that they can answer on the board or in the chat.
 
-1. Read `.grill/<slug>/user.js` for references the user added (see References).
-2. Mark each answered question `settled`, with its `answer` and a one-sentence `decision`.
-3. Add the new frontier as `asking`, and any question you can already see coming as `waiting`, so the user sees the open branches ahead.
-4. Rewrite `architecture` to match the decisions so far.
-5. Update the sketch (see Sketch).
+Where the environment wakes you when a background command exits, start `python3 <this skill's folder>/server.py .grill/<slug> --wait-answers --after <answered>` in the background. Use the session's `answered`; omit `--after` when it is empty. Treat the JSON output as the user's reply. Exit `3` means a waiter is already running: nothing to do. Exit `2` means it timed out: start it again while the session is active. Where a background command cannot wake you, ask the user to say in the chat when they have sent the answers on the board. Stop the waiter when the session finishes.
+
+**When a reply arrives**, in the chat or from the waiter:
+
+1. Read `.grill/<slug>/user.js` for new references (see References) and answer batches newer than `answered`. A file without `answers` means no batches. Apply each item as that question's answer: `option` names the chosen option, `text` carries an own answer or a note. A later batch wins over an earlier one for the same question. When the chat message and the board disagree, ask the user which answer to use before settling that question.
+2. Set `answered` to the newest batch id you applied. Write one line in the chat listing what you took from the board (`Q2: b · Q3: "Only on weekends."`); include a note beside an option when present, so the chat keeps the record.
+3. Mark each answered question `settled`, with its `answer` and a one-sentence `decision`. Questions left unanswered stay `asking` and go out again with the next round.
+4. Add the new frontier as `asking`, and any question you can already see coming as `waiting`, so the user sees the open branches ahead.
+5. Rewrite `architecture` to match the decisions so far.
+6. Update the sketch (see Sketch).
 
 Edit the changed questions in place; leave the rest of the file as it is.
 
@@ -62,6 +67,7 @@ The **sketch** is a rough picture of the thing itself, redrawn as decisions sett
 
 - **Choose the picture that shows the idea**: the screens of a site or app, the panel of a plugin, a palette and type sample for a visual language, a box-and-arrow diagram for something with no screen. Several sketches are fine (one per page, say).
 - **Keep it a sketch**: plain boxes and real labels in the session's language, drawn as one self-contained HTML file with inline CSS and no scripts, under `.grill/<slug>/sketch/`. It is done when the user could point at any part and name the decision behind it.
+- **Let the user choose by looking**: when a question asks how something looks or is laid out, write one variant sketch per option: the current sketch with that option applied, under `sketch/q5-a.html`, `sketch/q5-b.html`. Keep each fluid like every sketch and set the option's `sketch`. When the question settles, fold the chosen variant into the main sketch.
 - **Draw it fluid**: the user can drag a sketch wider, narrower or taller on the board, and the page inside reflows like a browser window. Lay it out with flexible widths (percentages, flex, grid, `max-width`) and give `body` no fixed width or height, so the sketch still reads at other sizes.
 - **Show the gaps**: where a part is still undecided, leave a dashed placeholder labelled with the question it waits on (`Q6`), so an open question on the tree and a hole in the sketch are the same thing seen twice.
 - **Bring it in when the interview turns visual**: the first sketch enters the board in the round that first asks how the thing looks or is laid out, drawn from the decisions settled so far. After each later round, edit the parts the new decisions touched, raise that sketch's `rev`, and say in `note` what changed.
@@ -116,6 +122,7 @@ window.__GRILL__ = {
   "title": "Recipe box",
   "idea": "A small app where a family keeps and shares its recipes.",
   "status": "active",
+  "answered": "",
   "architecture": [
     "One SQLite file holds recipes and members."
   ],
@@ -161,8 +168,8 @@ window.__GRILL__ = {
       "dependsOn": ["q1"],
       "status": "asking",
       "options": [
-        { "id": "a", "label": "A plain list" },
-        { "id": "b", "label": "A grid of photos" }
+        { "id": "a", "label": "A plain list", "sketch": "sketch/q2-a.html", "width": 390, "height": 760 },
+        { "id": "b", "label": "A grid of photos", "sketch": "sketch/q2-b.html", "width": 390, "height": 760 }
       ],
       "recommended": "a",
       "recommendation": "",
@@ -174,6 +181,7 @@ window.__GRILL__ = {
 ```
 
 - `lang`: the session's language code. The board ships `en` and `tr`; for another language add a `labels` object (the keys are in the `LABELS` block at the top of `viewer.html`).
+- `answered`: the id of the last answer batch applied from `user.js` (`a1`, `a2`, …); empty or missing before any board answers. The server owns `user.js`: read it, never edit it.
 - `sketches`: `width` and `height` are the size the sketch opens at (390 × 760 for a phone screen, 1280 × 800 for a desktop one); the board scales it to fit, and the user can resize it from there.
 - `refs`: your references. `src` is a path under the session folder or a full URL; `caption` is optional.
 - `research`: the research notes. `target` is a question id, or empty for the whole board; `status` is `todo`, `running` or `done`; `finding`, `sources` and `report` (the path of the report file) stay empty until it is `done`.
@@ -185,6 +193,7 @@ window.__GRILL__ = {
   - `researching`: a sub-agent is finding the fact this question needs.
   - `waiting`: visible already, but a question in `dependsOn` is still open. Give it the round you expect to ask it in; its options can come when it reaches the frontier.
 - `options` and `recommended`: the choices you offered and the id of the one you recommend. For an open question leave `options` empty and put your recommendation in `recommendation`.
+- Option `sketch`: a variant HTML path under the session folder, shown instead of its reference picture. Optional `width` and `height` give the drawn size, as for `sketches`; defaults are 390 × 760.
 - `answer`: `option` is the id the user picked (the recommended id when they accept your recommendation), or `null` when they answered in their own words; `text` carries those words or any note they added.
 - `decision`: one short sentence that stands on its own as a line of the spec, without the question beside it. It becomes the headline of the settled card, so the tree reads as the idea itself.
 - `architecture`: three to six short lines that describe the shape of the thing as decided so far; empty until the first decisions land.
