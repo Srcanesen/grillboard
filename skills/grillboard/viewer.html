@@ -381,8 +381,128 @@
   <!-- Pure logic lives in the two blocks below: no document, no window, no state shared with the page.
        Each block defines one global. Tests load a block by its id: `node --test tests/board`. -->
   <script id="grill-session">
-    // GrillSession: turns the raw session and user files into the one model the board reads.
-    const GrillSession = {};
+    // model(rawSession, rawUser, options = {}) -> normalized session fields plus userRefs, questionsByStatus, questionsById, openQuestions, researchByStatus, unfinishedResearch, pendingCount; questions have pending (boolean)/pendingItem (batch item or null), refs/research have parsedTarget; groups preserve file order, lookup is an object; serverMode: false disables pending.
+    // parseTarget(target) -> { questionId, optionId }, each '' when absent; 'idea' remains questionId 'idea'.
+    // batchNumber(id) -> positive number for a<number> with no leading zero, otherwise 0.
+    // hasAnswer(answer) -> true when an option is chosen or text is not blank.
+    // ANSWER_TEXT_MAX -> 2000, the maximum answer text length.
+    // questionNumber(id) -> digit string for q<number> (case insensitive, preserving zeros), otherwise ''.
+    // nodeId(kind, id) -> board id for idea, question, ref:user, ref:agent, research, report or sketch; unknown kinds throw.
+    // parseNodeId(nodeId) -> { kind, id }, reversing nodeId; unprefixed ids are questions and @idea is the idea with id ''.
+    // object(value) -> non-array object, otherwise {}; shared by page state readers.
+    // string(value) -> string for strings/numbers/booleans, otherwise ''; shared by page text readers.
+    // array(value) -> array, otherwise []; shared by page state readers.
+    // singleWebUrl(value) -> trimmed complete HTTP(S) URL, otherwise ''; shared by research, Markdown and pasted links.
+    const GrillSession = (() => {
+      // Normalize optional and malformed fields at the boundary.
+      function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; }
+      function string(value) { return typeof value === 'string' ? value : typeof value === 'number' || typeof value === 'boolean' ? String(value) : ''; }
+      function array(value) { return Array.isArray(value) ? value : []; }
+      function questionStatus(value) { return ['settled', 'asking', 'researching', 'waiting'].includes(value) ? value : 'waiting'; }
+      function normalizeSession(value) {
+        const source = object(value);
+        return {
+          lang: string(source.lang), title: string(source.title), idea: string(source.idea),
+          answered: string(source.answered), status: string(source.status), labels: object(source.labels), refs: normalizeRefs(source.refs, false),
+          sketches: normalizeSketches(source.sketches),
+          architecture: Array.from(array(source.architecture), string), research: normalizeResearch(source.research),
+          questions: Array.from(array(source.questions), value => {
+            const q = object(value);
+            const answer = object(q.answer);
+            const round = typeof q.round === 'number' ? q.round : typeof q.round === 'string' && q.round.trim() ? Number(q.round) : NaN;
+            return {
+              id: string(q.id), round: Number.isFinite(round) ? round : '',
+              title: string(q.title), body: string(q.body), status: questionStatus(q.status),
+              reopened: q.reopened === true, dependsOn: Array.from(array(q.dependsOn), string),
+              options: Array.from(array(q.options), value => {
+                const option = object(value);
+                return { id: string(option.id), label: string(option.label), sketch: string(option.sketch),
+                  width: sketchDimension(option.width, 390), height: sketchDimension(option.height, 760) };
+              }),
+              recommended: q.recommended == null ? null : string(q.recommended),
+              recommendation: string(q.recommendation), decision: string(q.decision),
+              answer: { option: answer.option == null ? null : string(answer.option), text: string(answer.text) }
+            };
+          })
+        };
+      }
+      // Sketch geometry has bounded defaults; destinations are checked before rendering.
+      function sketchDimension(value, fallback) { return Math.max(200, Math.min(4000, typeof value === 'number' && Number.isFinite(value) ? value : fallback)); }
+      function normalizeSketches(value) {
+        return array(value).map(value => {
+          const sketch = object(value);
+          return { id: string(sketch.id), title: string(sketch.title), src: string(sketch.src),
+            rev: typeof sketch.rev === 'number' && Number.isFinite(sketch.rev) ? sketch.rev : 0,
+            width: sketchDimension(sketch.width, 1280), height: sketchDimension(sketch.height, 800), note: string(sketch.note) };
+        });
+      }
+      // Research sources accept only complete HTTP(S) URLs, never relative destinations.
+      function normalizeResearch(value) {
+        return array(value).map(value => {
+          const note = object(value);
+          return { id: string(note.id), target: parseTarget(note.target).questionId, parsedTarget: parseTarget(note.target), topic: string(note.topic),
+            status: ['todo', 'running', 'done'].includes(note.status) ? note.status : 'todo', finding: string(note.finding), report: string(note.report),
+            sources: array(note.sources).map(value => {
+              const source = object(value);
+              return { title: string(source.title), url: singleWebUrl(source.url) };
+            }).filter(source => source.url) };
+        });
+      }
+      function normalizeRefs(value, user) {
+        return array(value).map(value => {
+          const ref = object(value);
+          return { id: string(ref.id), src: string(ref.src), target: string(ref.target), parsedTarget: parseTarget(ref.target), caption: string(ref.caption),
+            note: string(ref.note), name: string(ref.name), kind: string(ref.kind), user: user === true };
+        });
+      }
+      function singleWebUrl(text) {
+        const value = string(text).trim();
+        if (!/^https?:\/\/\S+$/i.test(value)) return '';
+        try { const url = new URL(value); return /^https?:$/.test(url.protocol) ? value : ''; } catch (_) { return ''; }
+      }
+      function parseTarget(target) {
+        const parts = string(target).split(':');
+        return { questionId: parts[0] || '', optionId: parts[1] || '' };
+      }
+      function batchNumber(id) { const match = /^a([1-9][0-9]*)$/.exec(id || ''); return match ? Number(match[1]) : 0; }
+      function hasAnswer(answer) { return !!answer && (answer.option != null || !!string(answer.text).trim()); }
+      const ANSWER_TEXT_MAX = 2000;
+      function questionNumber(id) { const match = /^q([0-9]+)$/i.exec(string(id)); return match ? match[1] : ''; }
+      const nodePrefixes = { 'ref:user': 'ref:user:', 'ref:agent': 'ref:agent:', research: 'research:', report: 'report:', sketch: 'sketch:' };
+      function nodeId(kind, id) {
+        if (kind === 'idea') return '@idea';
+        if (kind === 'question') return string(id);
+        if (!Object.prototype.hasOwnProperty.call(nodePrefixes, kind)) throw new Error('Unknown board node kind: ' + kind);
+        return nodePrefixes[kind] + string(id);
+      }
+      function parseNodeId(value) {
+        const id = string(value);
+        if (id === '@idea') return { kind: 'idea', id: '' };
+        for (const [kind, prefix] of Object.entries(nodePrefixes)) if (id.startsWith(prefix)) return { kind, id: id.slice(prefix.length) };
+        return { kind: 'question', id };
+      }
+      function model(rawSession, rawUser, options = {}) {
+        const data = normalizeSession(rawSession);
+        const user = object(rawUser);
+        const questionsByStatus = { settled: [], asking: [], researching: [], waiting: [] };
+        const questionsById = Object.fromEntries(data.questions.map(q => [q.id, q]));
+        const researchByStatus = { todo: [], running: [], done: [] };
+        for (const q of data.questions) questionsByStatus[q.status].push(q);
+        for (const note of data.research) researchByStatus[note.status].push(note);
+        const asking = new Set(questionsByStatus.asking.map(q => q.id));
+        const pending = new Map();
+        if (options.serverMode !== false) {
+          const batches = array(user.answers).map(object).filter(batch => batchNumber(batch.id) > batchNumber(data.answered))
+            .sort((a, b) => batchNumber(a.id) - batchNumber(b.id));
+          for (const batch of batches) for (const item of array(batch.items).map(object)) if (asking.has(item.question)) pending.set(item.question, item);
+        }
+        for (const q of data.questions) { q.pending = q.status === 'asking' && pending.has(q.id); q.pendingItem = q.pending ? pending.get(q.id) : null; }
+        return { ...data, userRefs: normalizeRefs(user.refs, true), questionsByStatus, questionsById,
+          openQuestions: data.questions.filter(q => q.status !== 'settled'), researchByStatus,
+          unfinishedResearch: data.research.filter(note => note.status !== 'done'), pendingCount: pending.size };
+      }
+      return { model, parseTarget, batchNumber, hasAnswer, ANSWER_TEXT_MAX, questionNumber, nodeId, parseNodeId, object, string, array, singleWebUrl };
+    })();
   </script>
   <!-- The camera block is separate from the session block: it knows rectangles, not questions. -->
   <script id="grill-camera">
@@ -524,62 +644,7 @@
       gapX: 28, gapY: 64, lrGapX: 96, lrGapY: 28
     };
 
-    // Normalize optional and malformed fields at the boundary.
-    function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; }
-    function string(value) { return typeof value === 'string' ? value : typeof value === 'number' || typeof value === 'boolean' ? String(value) : ''; }
-    function array(value) { return Array.isArray(value) ? value : []; }
-    function questionStatus(value) { return ['settled', 'asking', 'researching', 'waiting'].includes(value) ? value : 'waiting'; }
-    function normalizeSession(value) {
-      const source = object(value);
-      return {
-        lang: string(source.lang), title: string(source.title), idea: string(source.idea),
-        answered: string(source.answered), status: string(source.status), labels: object(source.labels), refs: normalizeRefs(source.refs, false),
-        sketches: normalizeSketches(source.sketches),
-        architecture: Array.from(array(source.architecture), string), research: normalizeResearch(source.research),
-        questions: Array.from(array(source.questions), value => {
-          const q = object(value);
-          const answer = object(q.answer);
-          const round = typeof q.round === 'number' ? q.round : typeof q.round === 'string' && q.round.trim() ? Number(q.round) : NaN;
-          return {
-            id: string(q.id), round: Number.isFinite(round) ? round : '',
-            title: string(q.title), body: string(q.body), status: questionStatus(q.status),
-            reopened: q.reopened === true, dependsOn: Array.from(array(q.dependsOn), string),
-            options: Array.from(array(q.options), value => {
-              const option = object(value);
-              return { id: string(option.id), label: string(option.label), sketch: string(option.sketch),
-                width: sketchDimension(option.width, 390), height: sketchDimension(option.height, 760) };
-            }),
-            recommended: q.recommended == null ? null : string(q.recommended),
-            recommendation: string(q.recommendation), decision: string(q.decision),
-            answer: { option: answer.option == null ? null : string(answer.option), text: string(answer.text) }
-          };
-        })
-      };
-    }
-    // Sketch geometry has bounded defaults; destinations are checked before rendering.
-    function sketchDimension(value, fallback) { return Math.max(200, Math.min(4000, typeof value === 'number' && Number.isFinite(value) ? value : fallback)); }
-    function normalizeSketches(value) {
-      return array(value).map(value => {
-        const sketch = object(value);
-        return { id: string(sketch.id), title: string(sketch.title), src: string(sketch.src),
-          rev: typeof sketch.rev === 'number' && Number.isFinite(sketch.rev) ? sketch.rev : 0,
-          width: sketchDimension(sketch.width, 1280), height: sketchDimension(sketch.height, 800), note: string(sketch.note) };
-      });
-    }
-    // Research sources accept only complete HTTP(S) URLs, never relative destinations.
-    function normalizeResearch(value) {
-      return array(value).map(value => {
-        const note = object(value);
-        return { id: string(note.id), target: string(note.target).split(':')[0], topic: string(note.topic),
-          status: ['todo', 'running', 'done'].includes(note.status) ? note.status : 'todo', finding: string(note.finding), report: string(note.report),
-          sources: array(note.sources).map(value => {
-            const source = object(value);
-            return { title: string(source.title), url: singleWebUrl(source.url) };
-          }).filter(source => source.url) };
-      });
-    }
     function sourceTitle(source) { return source.title || new URL(source.url).hostname; }
-    function researchNodeId(note) { return 'research:' + note.id; }
     function sessionLabels(session) {
       const base = LABELS[labelLanguage(session.lang)];
       const labels = { ...base };
@@ -599,16 +664,16 @@
 
     // Public Markdown builder shares the panel's decision fallback.
     function buildSpecMarkdown(session, labels, userRefs) {
-      const data = normalizeSession(session);
-      const text = { ...sessionLabels(data), ...object(labels) };
+      const data = GrillSession.model(session, { refs: userRefs });
+      const text = { ...sessionLabels(data), ...GrillSession.object(labels) };
       const parts = ['# ' + data.title];
       if (data.idea) parts.push(data.idea);
-      const decisions = data.questions.filter(q => q.status === 'settled');
-      const open = data.questions.filter(q => q.status !== 'settled');
+      const decisions = data.questionsByStatus.settled;
+      const open = data.openQuestions;
       if (decisions.length) parts.push('## ' + text.mdDecisions, decisions.map((q, i) => (i + 1) + '. ' + decisionText(q)).join('\n'));
       if (data.architecture.length) parts.push('## ' + text.mdArchitecture, data.architecture.map(line => '- ' + line).join('\n'));
-      const findings = data.research.filter(note => note.status === 'done');
-      const pending = data.research.filter(note => note.status !== 'done');
+      const findings = data.researchByStatus.done;
+      const pending = data.unfinishedResearch;
       if (findings.length) {
         const blocks = findings.map(note => {
           const block = ['### ' + note.topic];
@@ -621,7 +686,7 @@
       }
       if (pending.length) parts.push('## ' + text.mdToResearch, pending.map(note => '- ' + note.topic).join('\n'));
       if (open.length) parts.push('## ' + text.mdOpen, open.map(q => '- ' + q.title).join('\n'));
-      const refs = data.refs.concat(normalizeRefs(userRefs, true));
+      const refs = data.refs.concat(data.userRefs);
       if (refs.length) parts.push('## ' + text.mdReferences, refs.map(ref => '- ' + ((ref.user ? ref.note : ref.caption) || ref.name || fileName(ref.src)) + ' (' + ref.src + ')').join('\n'));
       if (data.sketches.length) parts.push('## ' + text.mdSketches, data.sketches.map(sketch => '- ' + sketch.title + ' (' + sketch.src + ')').join('\n'));
       return parts.join('\n\n').trimEnd() + '\n';
@@ -662,13 +727,13 @@
       });
     }
     function syncResearchSteps() {
-      const active = serverMode && /^https?:$/.test(window.location.protocol) && currentSession && currentSession.research.some(note => note.status === 'running');
+      const active = serverMode && /^https?:$/.test(window.location.protocol) && currentSession && currentSession.researchByStatus.running.length > 0;
       if (!active && stepsTimer !== null) { clearInterval(stepsTimer); stepsTimer = null; }
       if (active && stepsTimer === null) { pollResearchSteps(); stepsTimer = setInterval(pollResearchSteps, 1000); }
     }
     async function pollResearchSteps() {
       if (!serverMode || !/^https?:$/.test(window.location.protocol) || !currentSession) return;
-      const running = currentSession.research.filter(note => note.status === 'running');
+      const running = currentSession.researchByStatus.running;
       await Promise.all(running.map(async note => {
         if (stepsFetching.has(note.id)) return;
         stepsFetching.add(note.id);
@@ -678,7 +743,7 @@
           if (response.ok) lines = (await response.text()).split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(-3).map(line => line.slice(0, 120));
         } catch (_) {}
         finally { stepsFetching.delete(note.id); }
-        if (!currentSession.research.some(current => current.id === note.id && current.status === 'running')) return;
+        if (!currentSession.researchByStatus.running.some(current => current.id === note.id)) return;
         if (JSON.stringify(lines) === JSON.stringify(researchSteps.get(note.id) || [])) return;
         const heights = new Map([...nodeRecords].map(([id, record]) => [id, record.element.offsetHeight]));
         researchSteps.set(note.id, lines);
@@ -738,7 +803,7 @@
 
     // A pure block parser treats unsupported markup, including HTML, as text.
     function parseMarkdown(text) {
-      text = string(text);
+      text = GrillSession.string(text);
       const truncated = text.length > 400000;
       const lines = text.slice(0, 400000).replace(/\r\n?/g, '\n').split('\n');
       const blocks = []; let i = 0;
@@ -805,7 +870,7 @@
           while (end < tail.length && tail[end] !== '\n' && balance) { if (tail[end] === '(') balance++; if (tail[end] === ')') balance--; end++; }
           if (!balance) {
             const raw = tail.slice(0, end), url = tail.slice(start[0].length, end - 1);
-            if (singleWebUrl(url)) token = { length: end, tag: 'a', text: start[1], url };
+            if (GrillSession.singleWebUrl(url)) token = { length: end, tag: 'a', text: start[1], url };
             else { plain += raw; i += end; continue; }
           }
         }
@@ -814,7 +879,7 @@
           if (bare) {
             let url = bare[0].replace(/[.,;!?]+$/, '');
             while (url.endsWith(')') && (url.match(/\)/g) || []).length > (url.match(/\(/g) || []).length) url = url.slice(0, -1);
-            if (singleWebUrl(url)) token = { length: url.length, tag: 'a', text: url, url };
+            if (GrillSession.singleWebUrl(url)) token = { length: url.length, tag: 'a', text: url, url };
           }
         }
         if (!token) { plain += text[i++]; continue; }
@@ -859,26 +924,18 @@
     // References are normalized once; only relative and HTTP(S) destinations are usable.
     function labelLanguage(lang) {
       if (Object.prototype.hasOwnProperty.call(LABELS, lang)) return lang;
-      const browser = string(navigator.language).slice(0, 2).toLowerCase();
+      const browser = GrillSession.string(navigator.language).slice(0, 2).toLowerCase();
       return Object.prototype.hasOwnProperty.call(LABELS, browser) ? browser : 'en';
     }
     function safeSource(value) {
-      const src = string(value).trim();
+      const src = GrillSession.string(value).trim();
       if (!src || /[\\\u0000-\u001f\u007f]/.test(src) || src.startsWith('//')) return '';
       if (/^[a-z][a-z0-9+.-]*:/i.test(src) && !/^https?:/i.test(src)) return '';
       try { const url = new URL(src, sessionUrl); return /^https?:/i.test(src) ? (/^https?:$/.test(url.protocol) ? src : '') : src; }
       catch (_) { return ''; }
     }
-    function normalizeRefs(value, user) {
-      return array(value).map(value => {
-        const ref = object(value);
-        return { id: string(ref.id), src: string(ref.src), target: string(ref.target), caption: string(ref.caption),
-          note: string(ref.note), name: string(ref.name), kind: string(ref.kind), user: user === true };
-      });
-    }
-    function fileName(src) { return string(src).split(/[?#]/)[0].split('/').pop() || string(src); }
+    function fileName(src) { return GrillSession.string(src).split(/[?#]/)[0].split('/').pop() || GrillSession.string(src); }
     function isPicture(ref) { return ref.kind === 'image' || /\.(png|jpe?g|gif|webp|svg)$/i.test(ref.src.split(/[?#]/)[0]); }
-    function refNodeId(ref) { return 'ref:' + (ref.user ? 'user:' : 'agent:') + ref.id; }
 
     // Runtime state separates measured geometry, saved positions, and the viewport.
     const warning = document.getElementById('warning');
@@ -898,7 +955,7 @@
     const lightbox = document.getElementById('lightbox');
     const reader = document.getElementById('reader');
     const svgNamespace = 'http://www.w3.org/2000/svg';
-    const ideaId = '@idea';
+    const ideaId = GrillSession.nodeId('idea');
     const sessionParameter = new URLSearchParams(window.location.search).get('session');
     let sessionUrl;
     try {
@@ -926,7 +983,6 @@
     let currentSession = null;
     let currentUserRefs = [];
     const answerDrafts = new Map();
-    let pendingAnswers = new Map();
     let sendingAnswers = false;
     let answerError = '';
     const roundBar = document.getElementById('round-bar');
@@ -970,7 +1026,7 @@
     function offsetsKey() { return storageKey + (flow === 'lr' ? ':lr' : ''); }
     function readOffsets() {
       try {
-        const saved = object(JSON.parse(localStorage.getItem(offsetsKey()) || '{}'));
+        const saved = GrillSession.object(JSON.parse(localStorage.getItem(offsetsKey()) || '{}'));
         const positions = Object.create(null);
         for (const [id, pos] of Object.entries(saved)) if (pos && Number.isFinite(pos.dx) && Number.isFinite(pos.dy)) positions[id] = { dx: pos.dx, dy: pos.dy };
         return positions;
@@ -990,62 +1046,51 @@
       toastTimer = setTimeout(() => { toastNode.hidden = true; }, 2500);
     }
 
-    function batchNumber(id) { const match = /^a([1-9][0-9]*)$/.exec(id || ''); return match ? Number(match[1]) : 0; }
     function draftFor(id) { if (!answerDrafts.has(id)) answerDrafts.set(id, { option: null, text: '' }); return answerDrafts.get(id); }
-    function hasAnswer(answer) { return !!answer && (answer.option !== null || !!answer.text.trim()); }
-    function syncAnswers() {
-      const asking = new Set(currentSession.questions.filter(q => q.status === 'asking').map(q => q.id));
-      for (const id of answerDrafts.keys()) if (!asking.has(id)) answerDrafts.delete(id);
-      pendingAnswers = new Map();
-      if (!serverMode) return;
-      const batches = array(object(latestUser).answers).filter(batch => batchNumber(batch.id) > batchNumber(currentSession.answered))
-        .sort((a, b) => batchNumber(a.id) - batchNumber(b.id));
-      for (const batch of batches) for (const item of array(batch.items)) if (asking.has(item.question)) pendingAnswers.set(item.question, item);
-    }
     function growAnswer(editor) { editor.style.height = 'auto'; editor.style.height = Math.min(112, Math.max(34, editor.scrollHeight)) + 'px'; }
     function refreshAnswerControls() {
-      for (const q of currentSession.questions.filter(q => q.status === 'asking')) {
+      for (const q of currentSession.questionsByStatus.asking) {
         const card = cardNodes.get(q.id); if (!card) continue;
-        const answer = pendingAnswers.get(q.id) || draftFor(q.id);
+        const answer = q.pendingItem || draftFor(q.id);
         const rows = [...card.querySelectorAll('[data-answer-option]')];
         for (const row of rows) {
           const picked = row.dataset.answerOption === answer.option;
           row.classList.toggle('picked', picked); row.setAttribute('aria-checked', String(picked));
-          row.setAttribute('aria-disabled', String(pendingAnswers.has(q.id) || sendingAnswers));
-          row.tabIndex = !pendingAnswers.has(q.id) && (picked || (answer.option === null && row === rows[0])) ? 0 : -1;
+          row.setAttribute('aria-disabled', String(q.pending || sendingAnswers));
+          row.tabIndex = !q.pending && (picked || (answer.option === null && row === rows[0])) ? 0 : -1;
           row.querySelector('.pick-mark').hidden = !picked;
         }
         const editor = card.querySelector('.answer-editor');
-        if (editor) { if (editor.value !== answer.text) editor.value = answer.text; editor.readOnly = pendingAnswers.has(q.id) || sendingAnswers; growAnswer(editor); }
+        if (editor) { if (editor.value !== answer.text) editor.value = answer.text; editor.readOnly = q.pending || sendingAnswers; growAnswer(editor); }
         const accept = card.querySelector('.accept-recommendation'); if (accept) accept.disabled = sendingAnswers;
       }
       renderRoundBar(); measureAndLayout();
     }
     function chooseAnswer(question, option) {
-      if (sendingAnswers || pendingAnswers.has(question)) return;
+      if (sendingAnswers || currentSession.questionsById[question].pending) return;
       const answer = draftFor(question); answer.option = answer.option === option ? null : option;
       answerError = ''; recordInteraction(); refreshAnswerControls();
     }
     function renderRoundBar() {
-      const asking = currentSession ? currentSession.questions.filter(q => q.status === 'asking') : [];
-      const open = asking.filter(q => !pendingAnswers.has(q.id));
+      const asking = currentSession ? currentSession.questionsByStatus.asking : [];
+      const open = asking.filter(q => !q.pending);
       roundBar.hidden = !serverMode || !asking.length;
       roundBar.replaceChildren(); if (roundBar.hidden) return;
-      if (pendingAnswers.size) roundBar.append(element('div', 'round-message', currentLabels.answersSent));
+      if (currentSession.pendingCount) roundBar.append(element('div', 'round-message', currentLabels.answersSent));
       if (open.length) {
-        const done = open.filter(q => hasAnswer(draftFor(q.id))).length;
+        const done = open.filter(q => GrillSession.hasAnswer(draftFor(q.id))).length;
         const count = button(interpolate(currentLabels.roundAnswered, { done, total: open.length }), currentLabels.focusRound, () => {
-          const unanswered = open.filter(q => !hasAnswer(draftFor(q.id)));
+          const unanswered = open.filter(q => !GrillSession.hasAnswer(draftFor(q.id)));
           const next = unanswered[(unanswered.findIndex(q => q.id === selectedQuestion) + 1) % unanswered.length];
           if (next) { recordInteraction(); selectQuestion(next.id); focusView(false, [next.id]); }
         }, 'round-count');
         roundBar.append(count);
-        if (pendingAnswers.size) roundBar.append(element('span', '', interpolate(currentLabels.remainingAnswers, { count: open.length - done })));
+        if (currentSession.pendingCount) roundBar.append(element('span', '', interpolate(currentLabels.remainingAnswers, { count: open.length - done })));
         const pick = button(currentLabels.pickRecommendations, currentLabels.pickRecommendations, () => {
           for (const q of open) {
-            const answer = draftFor(q.id); if (hasAnswer(answer)) continue;
+            const answer = draftFor(q.id); if (GrillSession.hasAnswer(answer)) continue;
             if (q.options.some(option => option.id === q.recommended)) answer.option = q.recommended;
-            else if (q.recommendation) answer.text = q.recommendation.slice(0, 2000);
+            else if (q.recommendation) answer.text = q.recommendation.slice(0, GrillSession.ANSWER_TEXT_MAX);
           }
           answerError = ''; refreshAnswerControls();
         });
@@ -1058,15 +1103,15 @@
     }
     async function sendRoundAnswers() {
       if (sendingAnswers) return;
-      const items = currentSession.questions.filter(q => q.status === 'asking' && !pendingAnswers.has(q.id) && hasAnswer(draftFor(q.id)))
+      const items = currentSession.questionsByStatus.asking.filter(q => !q.pending && GrillSession.hasAnswer(draftFor(q.id)))
         .map(q => ({ question: q.id, ...draftFor(q.id) }));
       if (!items.length) return;
       sendingAnswers = true; answerError = ''; refreshAnswerControls();
       try {
         const result = await apiRequest('api/answers', 'POST', { items });
         await loadFiles();
-        const user = object(latestUser);
-        if (!array(user.answers).some(batch => batch.id === result.batch.id)) latestUser = { ...user, answers: array(user.answers).concat(result.batch) };
+        const user = GrillSession.object(latestUser);
+        if (!GrillSession.array(user.answers).some(batch => batch.id === result.batch.id)) latestUser = { ...user, answers: GrillSession.array(user.answers).concat(result.batch) };
         // Sent drafts belong to this batch; advancing answered must expose a fresh input.
         for (const item of items) answerDrafts.delete(item.question);
         lastRenderedJson = null; renderLatest();
@@ -1082,15 +1127,15 @@
 
     // Questions lead each card; detail and research disclosure stay in memory.
     function questionLabel(q, labels) {
-      const match = /^q([0-9]+)$/i.exec(q.id);
-      return match ? labels.qPrefix + match[1] : q.id.toUpperCase();
+      const number = GrillSession.questionNumber(q.id);
+      return number ? labels.qPrefix + number : q.id.toUpperCase();
     }
     function validDependencies(q, questionsById) {
       return [...new Set(q.dependsOn)].filter(id => id !== q.id && questionsById.has(id));
     }
     function questionCard(q, labels, questionsById, pictures, researchNotes) {
       const card = element('article', 'question-card ' + q.status);
-      const pending = serverMode && q.status === 'asking' && pendingAnswers.get(q.id);
+      const pending = q.pendingItem;
       const editable = serverMode && q.status === 'asking' && !pending;
       const interactive = editable || !!pending;
       const answer = pending || (editable ? draftFor(q.id) : q.answer);
@@ -1197,20 +1242,20 @@
         }
         if (q.recommendation) details.append(element('p', 'note', labels.recommended + ': ' + q.recommendation));
         if (interactive) {
-          const editor = element('textarea', 'answer-editor'); editor.rows = 1; editor.maxLength = 2000;
+          const editor = element('textarea', 'answer-editor'); editor.rows = 1; editor.maxLength = GrillSession.ANSWER_TEXT_MAX;
           editor.value = answer.text; editor.placeholder = labels.ownAnswer; editor.setAttribute('aria-label', labels.ownAnswer);
           editor.readOnly = !!pending || sendingAnswers; editor.dataset.answerQuestion = q.id;
           editor.addEventListener('input', () => { draftFor(q.id).text = editor.value; growAnswer(editor); answerError = ''; renderRoundBar(); measureAndLayout(); });
           details.append(editor);
           if (editable && !q.options.length && q.recommendation) details.append(button(labels.acceptRecommendation, labels.acceptRecommendation, () => {
-            draftFor(q.id).text = q.recommendation.slice(0, 2000); refreshAnswerControls(); editor.focus({ preventScroll: true });
+            draftFor(q.id).text = q.recommendation.slice(0, GrillSession.ANSWER_TEXT_MAX); refreshAnswerControls(); editor.focus({ preventScroll: true });
           }, 'accept-recommendation'));
         }
         if (!interactive && q.answer.text) details.append(element('p', 'answer-text' + (q.answer.option === null ? ' chosen' : ''), labels.answer + ': ' + q.answer.text));
         if (q.status === 'researching') details.append(element('p', 'note', labels.researchingHint));
         body.append(details);
       } else {
-        const dependencies = validDependencies(q, questionsById).map(id => questionsById.get(id)).filter(parent => parent.status !== 'settled');
+        const dependencies = validDependencies(q, questionsById).map(id => questionsById.get(id)).filter(parent => !currentSession.questionsByStatus.settled.includes(parent));
         body.append(element('p', 'note', labels.waitingOn + ': ' + dependencies.map(parent => questionLabel(parent, labels)).join(', ')));
       }
       const secondary = validDependencies(q, questionsById).slice(1);
@@ -1218,7 +1263,7 @@
         ids: secondary.map(id => questionLabel(questionsById.get(id), labels)).join(', ')
       })));
       card.append(farLabel((q.status === 'settled' ? '✓ ' : '') + q.title));
-      appendResearchChips(body, q, researchNotes.filter(note => !(note.status === 'done' && safeSource(note.report))));
+      appendResearchChips(body, q, researchNotes.filter(note => !currentSession.researchByStatus.done.includes(note) || !safeSource(note.report)));
       return card;
     }
     function appendResearchChips(card, q, notes) {
@@ -1258,9 +1303,9 @@
       return section;
     }
     function renderSpec(data, labels) {
-      const decisions = data.questions.filter(q => q.status === 'settled').map(q => element('li', '', decisionText(q)));
+      const decisions = data.questionsByStatus.settled.map(q => element('li', '', decisionText(q)));
       const architecture = data.architecture.map(line => element('li', '', line));
-      const open = data.questions.filter(q => q.status !== 'settled').map(q => {
+      const open = data.openQuestions.map(q => {
         const item = element('li', '', questionLabel(q, labels) + ': ' + q.title);
         item.append(statusBadge(q.status, labels));
         return item;
@@ -1275,8 +1320,8 @@
         copyResetTimer = setTimeout(() => { button.textContent = labels.copySpec; }, 1500);
       });
       const researchSections = [];
-      const findings = data.research.filter(note => note.status === 'done');
-      const pending = data.research.filter(note => note.status !== 'done');
+      const findings = data.researchByStatus.done;
+      const pending = data.unfinishedResearch;
       if (findings.length) {
         const section = element('section', 'spec-section');
         section.append(element('h3', '', labels.researchFindings));
@@ -1336,7 +1381,7 @@
       const questions = nodes.filter(node => node.kind === 'question');
       const refs = nodes.filter(node => node.kind === 'reference');
       const reports = nodes.filter(node => node.kind === 'report');
-      const idea = nodes.find(node => node.kind === 'idea') || { id: '@idea', width: LAYOUT.ideaWidth, height: 80 };
+      const idea = nodes.find(node => node.kind === 'idea') || { id: GrillSession.nodeId('idea'), width: LAYOUT.ideaWidth, height: 80 };
       const byId = new Map(questions.map(node => [node.id, node]));
       const clusters = [], items = new Map(), levels = [], edges = [];
       function addCluster(node) {
@@ -1441,7 +1486,7 @@
         }
       }
       const boardRefs = refs.filter(ref => !positions[ref.id]);
-      const boardResearch = nodes.filter(node => node.kind === 'research' && !byId.has((node.target || '').split(':')[0]));
+      const boardResearch = nodes.filter(node => node.kind === 'research' && !byId.has(GrillSession.parseTarget(node.target).questionId));
       const boardReports = reports.filter(report => !positions[report.id]);
       const boardColumn = boardRefs.concat(boardResearch, boardReports);
       const boardRefX = Math.min(...clusters.map(item => item.x), ...sketches.map(sketch => positions[sketch.id].x)) - 80 - Math.max(200, ...boardColumn.map(node => node.width));
@@ -1455,7 +1500,7 @@
       }
       for (const note of boardResearch) {
         placeBoardItem(note);
-        for (const report of boardReports.filter(report => (report.noteId && report.noteId === note.noteId) || report.id === 'report:' + note.id.replace(/^research:/, ''))) {
+        for (const report of boardReports.filter(report => (report.noteId && report.noteId === note.noteId) || GrillSession.parseNodeId(report.id).id === GrillSession.parseNodeId(note.id).id)) {
           placeBoardItem(report); placedReports.add(report.id);
         }
       }
@@ -1500,7 +1545,7 @@
       node.append(img);
       node.dataset.picture = 'true';
       node.pictureReference = ref;
-      if (ref.user) node.dataset.inlineRef = refNodeId(ref);
+      if (ref.user) node.dataset.inlineRef = GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id);
       return node;
     }
     function referenceCard(ref) {
@@ -1528,12 +1573,12 @@
       const remove = button('×', currentLabels.deleteRef, async () => {
         try {
           await apiRequest('api/refs/' + encodeURIComponent(ref.id), 'DELETE');
-          delete manualOffsets[refNodeId(ref)]; saveOffsets(); await loadFiles();
+          delete manualOffsets[GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id)]; saveOffsets(); await loadFiles();
         } catch (error) { toast(currentLabels.refFailed + ': ' + error.message); }
       }, 'delete-ref');
       const note = button(ref.note || currentLabels.addNote, currentLabels.addNote, () => editNote(note, ref), 'ref-note' + (ref.note ? '' : ' placeholder'));
       card.append(remove, note);
-      if (ref.target === 'idea' || (currentSession && currentSession.questions.some(q => q.id === ref.target.split(':')[0]))) {
+      if (ref.target === 'idea' || (currentSession && Object.prototype.hasOwnProperty.call(currentSession.questionsById, ref.parsedTarget.questionId))) {
         card.append(button('−', currentLabels.disconnect, async () => {
           try { await updateReferenceTarget(ref, ''); }
           catch (error) { toast(currentLabels.refFailed + ': ' + error.message); }
@@ -1542,7 +1587,7 @@
     }
     async function updateReferenceTarget(ref, target) {
       await apiRequest('api/refs/' + encodeURIComponent(ref.id), 'POST', { target });
-      delete manualOffsets[refNodeId(ref)]; saveOffsets(); applyOffsets(); scheduleLines();
+      delete manualOffsets[GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id)]; saveOffsets(); applyOffsets(); scheduleLines();
       await loadFiles();
     }
     function editNote(note, ref) {
@@ -1654,7 +1699,7 @@
       if (changed) {
         entry.node.classList.remove('highlight'); void entry.node.offsetWidth; entry.node.classList.add('highlight');
       }
-      registerNode('sketch:' + sketch.id, entry.node, { kind: 'sketch', sketch });
+      registerNode(GrillSession.nodeId('sketch', sketch.id), entry.node, { kind: 'sketch', sketch });
     }
 
     // A saved panel width is independent of the tree's stored offsets.
@@ -1709,28 +1754,30 @@
     function scaleEnlargedSketch() {
       if (!enlargedSketch) return;
       const { frame, surface, sketch, heading } = enlargedSketch;
-      const record = nodeRecords.get('sketch:' + sketch.id);
+      const record = nodeRecords.get(GrillSession.nodeId('sketch', sketch.id));
       const viewport = record ? sketchSize(record) : sketch;
       const scale = Math.min(1, window.innerWidth * .92 / viewport.width, Math.max(1, window.innerHeight * .92 - heading.offsetHeight - 12) / viewport.height);
       sizeSketchFrame(frame, surface, { ...sketch, width: viewport.width, height: viewport.height }, scale);
     }
 
     // Good reads replace card contents, measure them, and keep the current view.
-    function render(session, userRefs) {
+    function render(session, user) {
       const firstRender = currentSession === null;
       const scrollTop = spec.scrollTop;
       const focused = document.activeElement;
       const answerFocus = focused && focused.matches('.answer-editor') ? { id: focused.dataset.answerQuestion, start: focused.selectionStart, end: focused.selectionEnd } : null;
       const radioFocus = focused && focused.matches('[data-answer-option]') ? { id: focused.closest('.question-card').dataset.questionId, option: focused.dataset.answerOption } : null;
       const focusId = focused && focused.closest('.node') && focused.closest('.node').dataset.nodeId;
-      currentSession = normalizeSession(session);
-      currentUserRefs = normalizeRefs(userRefs, true);
+      currentSession = GrillSession.model(session, user, { serverMode });
+      currentUserRefs = currentSession.userRefs;
       currentLabels = sessionLabels(currentSession);
-      syncAnswers(); variantObserver.disconnect();
+      const asking = new Set(currentSession.questionsByStatus.asking.map(q => q.id));
+      for (const id of answerDrafts.keys()) if (!asking.has(id)) answerDrafts.delete(id);
+      variantObserver.disconnect();
       const data = currentSession;
       const labels = currentLabels;
       stepViews = new Map();
-      for (const id of researchSteps.keys()) if (!data.research.some(note => note.id === id && note.status === 'running')) researchSteps.delete(id);
+      for (const id of researchSteps.keys()) if (!data.researchByStatus.running.some(note => note.id === id)) researchSteps.delete(id);
       if (readerState && !data.research.some(note => note.id === readerState.id)) closeReader();
       document.documentElement.lang = labelLanguage(data.lang);
       document.title = data.title || labels.idea;
@@ -1740,13 +1787,13 @@
       const titleLine = element('div', 'title-line'); titleLine.append(element('h1', '', data.title));
       if (data.status === 'done') titleLine.append(element('span', 'badge done', labels.done));
       const progress = element('div', 'progress');
-      progress.append(element('span', '', interpolate(labels.progress, { done: data.questions.filter(q => q.status === 'settled').length, total: data.questions.length })));
+      progress.append(element('span', '', interpolate(labels.progress, { done: data.questionsByStatus.settled.length, total: data.questions.length })));
       const dot = element('span', 'live-dot changed'); dot.setAttribute('role', 'img'); dot.setAttribute('aria-label', labels.live); progress.append(dot);
       header.replaceChildren(titleLine, element('p', 'idea-text', data.idea), progress);
       renderSpec(data, labels); spec.scrollTop = scrollTop;
       const changedSketches = new Set(usableSketches().filter(sketch => !firstRender &&
         (!previousSketchRevisions.has(sketch.id) || sketch.rev > previousSketchRevisions.get(sketch.id))).map(sketch => sketch.id));
-      const newSketches = usableSketches().filter(sketch => !firstRender && !previousSketchRevisions.has(sketch.id)).map(sketch => 'sketch:' + sketch.id);
+      const newSketches = usableSketches().filter(sketch => !firstRender && !previousSketchRevisions.has(sketch.id)).map(sketch => GrillSession.nodeId('sketch', sketch.id));
       previousSketchRevisions = new Map(usableSketches().map(sketch => [sketch.id, sketch.rev]));
       renderToolbar(); updateSpec();
       world.setAttribute('role', 'tree'); world.setAttribute('aria-label', data.title || labels.idea);
@@ -1764,14 +1811,14 @@
       for (const child of Array.from(world.children)) if (!keptNodes.has(child)) child.remove();
       world.prepend(connectorLayer); world.append(socketLayer);
       const references = data.refs.concat(currentUserRefs).filter(ref => safeSource(ref.src)).map(ref => ({ ...ref, src: safeSource(ref.src) }));
-      const questionsById = new Map(data.questions.map(q => [q.id, q]));
+      const questionsById = new Map(Object.entries(data.questionsById));
       const pictures = new Map();
       const remaining = [];
       for (const ref of references) {
-        const q = questionsById.get(ref.target.split(':')[0]);
-        const optionTarget = q && q.options.some(option => ref.target === q.id + ':' + option.id);
+        const q = questionsById.get(ref.parsedTarget.questionId);
+        const optionTarget = q && q.options.some(option => ref.parsedTarget.optionId === option.id && ref.target === q.id + ':' + option.id);
         if (optionTarget && q.status !== 'waiting' && isPicture(ref) && !pictures.has(ref.target)) pictures.set(ref.target, ref);
-        else remaining.push({ ...ref, target: optionTarget ? q.id : ref.target });
+        else remaining.push({ ...ref, target: optionTarget ? q.id : ref.target, parsedTarget: optionTarget ? GrillSession.parseTarget(q.id) : ref.parsedTarget });
       }
       const idea = element('div', 'idea-card');
       idea.append(element('span', 'caption', labels.idea), element('strong', '', data.title));
@@ -1793,16 +1840,16 @@
       }
       previousStatuses = nextStatuses;
       for (const ref of remaining) {
-        const id = refNodeId(ref);
+        const id = GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id);
         const card = referenceCard(ref);
-        if (pendingHighlights.has(refNodeId(ref))) { card.classList.add('highlight'); pendingHighlights.delete(refNodeId(ref)); }
+        if (pendingHighlights.has(GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id))) { card.classList.add('highlight'); pendingHighlights.delete(GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id)); }
         registerNode(id, card, { kind: 'reference', target: ref.target, ref });
       }
       for (const ref of pictures.values()) {
-        if (pendingHighlights.has(refNodeId(ref))) {
-          const target = cardNodes.get(ref.target.split(':')[0]);
+        if (pendingHighlights.has(GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id))) {
+          const target = cardNodes.get(ref.parsedTarget.questionId);
           if (target) target.classList.add('highlight');
-          pendingHighlights.delete(refNodeId(ref));
+          pendingHighlights.delete(GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id));
         }
       }
       const nextResearchStatuses = new Map();
@@ -1811,15 +1858,15 @@
         if (questionsById.has(note.target)) continue;
         const card = researchCard(note);
         if (previousResearchStatuses.get(note.id) !== note.status) card.classList.add('highlight');
-        registerNode(researchNodeId(note), card, { kind: 'research', target: note.target });
+        registerNode(GrillSession.nodeId('research', note.id), card, { kind: 'research', target: note.target });
       }
       previousResearchStatuses = nextResearchStatuses;
-      const reports = data.research.filter(note => note.status === 'done' && safeSource(note.report));
+      const reports = data.researchByStatus.done.filter(note => safeSource(note.report));
       const newReports = reports.filter(note => !firstRender && !previousReports.has(note.id));
       for (const note of reports) {
         const card = reportCard(note, questionsById.has(note.target));
         if (newReports.some(added => added.id === note.id)) card.classList.add('highlight');
-        registerNode('report:' + note.id, card, { kind: 'report', target: questionsById.has(note.target) ? note.target : '', noteId: note.id, note });
+        registerNode(GrillSession.nodeId('report', note.id), card, { kind: 'report', target: questionsById.has(note.target) ? note.target : '', noteId: note.id, note });
       }
       previousReports = new Set(reports.map(note => note.id));
       for (const sketch of usableSketches()) updateSketchNode(sketch, changedSketches.has(sketch.id));
@@ -1839,7 +1886,7 @@
       else if (Date.now() - lastInteraction >= 10000) {
         // A sketch that just entered the board is shown with the idea it hangs from; otherwise the view follows the new questions.
         if (newSketches.length) focusView(true, [ideaId].concat(newSketches));
-        else if (newReports.length) focusView(true, [questionsById.has(newReports[0].target) ? newReports[0].target : ideaId, 'report:' + newReports[0].id]);
+        else if (newReports.length) focusView(true, [questionsById.has(newReports[0].target) ? newReports[0].target : ideaId, GrillSession.nodeId('report', newReports[0].id)]);
         else if (newAsking.length) focusView(true);
       }
     }
@@ -1854,10 +1901,10 @@
     function readNodeSizes() {
       const sizes = Object.create(null);
       try {
-        const saved = object(JSON.parse(localStorage.getItem(sizesKey) || '{}'));
+        const saved = GrillSession.object(JSON.parse(localStorage.getItem(sizesKey) || '{}'));
         for (const [id, size] of Object.entries(saved)) {
           if (typeof size === 'number' && Number.isFinite(size)) sizes[id] = size;
-          else if (id.startsWith('sketch:') && size && ['width', 'height', 'scale'].every(key => typeof size[key] === 'number' && Number.isFinite(size[key]) && size[key] > 0)) {
+          else if (GrillSession.parseNodeId(id).kind === 'sketch' && size && ['width', 'height', 'scale'].every(key => typeof size[key] === 'number' && Number.isFinite(size[key]) && size[key] > 0)) {
             sizes[id] = { width: size.width, height: size.height, scale: size.scale };
           }
         }
@@ -2128,7 +2175,7 @@
       for (const edge of graph.edges) {
         const parent = nodeRecords.get(edge.from), child = nodeRecords.get(edge.to);
         if (!parent || !child) continue;
-        const status = currentSession.questions.find(q => q.id === child.id).status;
+        const status = currentSession.questionsById[child.id].status;
         const color = { settled: 'green', asking: 'accent', researching: 'amber', waiting: 'line' }[status];
         let start = output(parent);
         if (flow === 'lr') start = endpoint(parent, treeOut);
@@ -2338,7 +2385,7 @@
       ended.record.element.remove(); nodeRecords.delete(ended.record.id);
       delete manualOffsets[ended.record.id]; delete graph.positions[ended.record.id]; delete graph.parents[ended.record.id]; saveOffsets(); scheduleLines();
     }
-    function refByNodeId(id) { return currentUserRefs.find(ref => refNodeId(ref) === id); }
+    function refByNodeId(id) { return currentUserRefs.find(ref => GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id) === id); }
     canvas.addEventListener('pointerdown', event => {
       if (nodeResize) { event.preventDefault(); return; }
       if (event.button !== 0) return;
@@ -2384,7 +2431,7 @@
       if (!gesture.dragged && gesture.inlineRef) {
         // An option picture becomes a temporary reference card while it is dragged.
         const ref = gesture.inlineRef, point = worldPoint(gesture.startX, gesture.startY);
-        const card = referenceCard(ref), id = refNodeId(ref);
+        const card = referenceCard(ref), id = GrillSession.nodeId(ref.user ? 'ref:user' : 'ref:agent', ref.id);
         registerNode(id, card, { kind: 'reference', target: '', ref });
         const record = nodeRecords.get(id); record.width = card.offsetWidth; record.height = card.offsetHeight;
         record.x = point.x - 100; record.y = point.y - 40;
@@ -2501,7 +2548,7 @@
       const response = await fetch(new URL(path, window.location.href), options);
       let data;
       try { data = await response.json(); } catch (_) { throw new Error(response.statusText || String(response.status)); }
-      if (!response.ok || !data || data.ok !== true) throw new Error(string(data && data.error) || response.statusText || String(response.status));
+      if (!response.ok || !data || data.ok !== true) throw new Error(GrillSession.string(data && data.error) || response.statusText || String(response.status));
       return data;
     }
     async function detectServer() {
@@ -2513,14 +2560,9 @@
       syncResearchSteps();
       if (serverMode && currentSession) { lastRenderedJson = null; renderLatest(); }
     }
-    function singleWebUrl(text) {
-      const value = string(text).trim();
-      if (!/^https?:\/\/\S+$/i.test(value)) return '';
-      try { const url = new URL(value); return /^https?:$/.test(url.protocol) ? value : ''; } catch (_) { return ''; }
-    }
     function transferUrl(transfer) {
-      const lines = string(transfer.getData('text/uri-list')).split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
-      return lines.map(singleWebUrl).find(Boolean) || singleWebUrl(transfer.getData('text/plain'));
+      const lines = GrillSession.string(transfer.getData('text/uri-list')).split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+      return lines.map(GrillSession.singleWebUrl).find(Boolean) || GrillSession.singleWebUrl(transfer.getData('text/plain'));
     }
     async function addReference(file, url, target, position) {
       try {
@@ -2531,9 +2573,9 @@
           data = await apiRequest('api/refs?' + query, 'POST', file, file.type);
         } else data = await apiRequest('api/refs', 'POST', { url, target });
         if (data.ref && data.ref.id) {
-          pendingHighlights.add(refNodeId({ id: data.ref.id, user: true }));
+          pendingHighlights.add(GrillSession.nodeId('ref:user', data.ref.id));
           if (position) {
-            pendingDropPositions.set(refNodeId({ id: data.ref.id, user: true }), { x: position.x, y: position.y });
+            pendingDropPositions.set(GrillSession.nodeId('ref:user', data.ref.id), { x: position.x, y: position.y });
           }
         }
         await loadFiles(); toast(currentLabels.refAdded);
@@ -2564,7 +2606,7 @@
       const transfer = event.clipboardData; if (!transfer) return;
       const items = Array.from(transfer.items || []).filter(item => item.kind === 'file').map(item => item.getAsFile()).filter(Boolean);
       const files = items.length ? items : Array.from(transfer.files || []);
-      const url = files.length ? '' : singleWebUrl(transfer.getData('text/plain'));
+      const url = files.length ? '' : GrillSession.singleWebUrl(transfer.getData('text/plain'));
       if (!files.length && !url) return;
       event.preventDefault();
       if (!serverMode) { toast(currentLabels.needServer); return; }
@@ -2577,7 +2619,6 @@
     let failedReads = 0;
     let lastRenderedJson = null;
     let latestSession = null;
-    let latestUserRefs = [];
     let latestUser = null;
     let loading = null;
     let reloadRequested = false;
@@ -2605,7 +2646,7 @@
       if (!latestSession || gesture || pinch || connection || nodeResize || document.querySelector('.note-editor')) return;
       const json = JSON.stringify([latestSession, latestUser]);
       if (json === lastRenderedJson) return;
-      render(latestSession, latestUserRefs); lastRenderedJson = json;
+      render(latestSession, latestUser); lastRenderedJson = json;
     }
     function loadFiles(force) {
       if (loading) {
@@ -2616,7 +2657,7 @@
         do {
           reloadRequested = false;
           const [session, user] = await Promise.all([readScript(sessionUrl, '__GRILL__'), readScript(userUrl, '__GRILL_USER__')]);
-          if (user) { latestUser = user; latestUserRefs = array(user.refs); }
+          if (user) latestUser = user;
           if (session) { latestSession = session; failedReads = 0; warning.hidden = true; }
           else {
             failedReads++;
