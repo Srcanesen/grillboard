@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Home</title>
+<style>
+  body { margin: 0; font: 15px/1.4 system-ui, sans-serif; background: #f3f1ec; color: #2c2c2a; }
+  .bar { background: #3a3a37; color: #fff; padding: 14px 16px; font-weight: 600; }
+  .wrap { padding: 16px; display: grid; gap: 14px; }
+  .box { background: #fff; border: 1px solid #cfcdc6; border-radius: 8px; padding: 12px; }
+  .open { border: 2px dashed #2f6fde; background: #eef3fd; color: #1d4fa8; border-radius: 8px; padding: 12px; }
+  .tag { display: inline-block; font-size: 12px; font-weight: 600; background: #2f6fde; color: #fff; border-radius: 4px; padding: 1px 6px; margin-right: 6px; }
+  .muted { color: #6b6b66; font-size: 13px; }
+  .photos { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; margin-top: 10px; }
+  .photos div { background: #d9c7a8; border-radius: 6px; min-height: 70px; }
+  .photos .big { grid-row: span 2; min-height: 148px; }
+</style>
+</head>
+<body>
+  <div class="bar">Recipe box</div>
+  <div class="wrap">
+    <div class="open"><span class="tag">Q4</span>Sign-in is not decided yet</div>
+    <div class="open"><span class="tag">Q8</span>Home screen layout is not decided yet</div>
+    <div class="box">
+      <strong>Grandma's apple pie</strong>
+      <div class="muted">A recipe carries several photos.</div>
+      <div class="photos"><div class="big"></div><div></div><div></div></div>
+    </div>
+    <div class="open"><span class="tag">Q5</span>Who can edit a recipe?</div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,2376 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title></title>
+  <style>
+    /* Theme and page layout. */
+    :root {
+      color-scheme: light;
+      --radius: 10px; --radius-small: 5px;
+      --page: #f4efe6; --card: #fffdf8; --panel: #efe8db; --border: #ddd3c0;
+      --text: #2a2622; --muted: #6f6558; --accent: #b5400d; --accent-tint: #fbe9d9;
+      --green: #2a7449; --green-tint: #e3f1e4; --amber: #855600; --amber-tint: #f8ecd0;
+      --highlight: #fbe3cc; --violet: #6246b0; --violet-tint: #ece6f8; --line: #cdbfa6;
+      --shadow: 0 6px 20px rgba(70,50,20,.10);
+      --on-accent: #ffffff;
+      --font-display: ui-serif, Charter, 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+      --sketch-shadow: 0 18px 48px rgba(70,50,20,.18);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --page: #1b1916; --card: #25221e; --panel: #201d1a; --border: #3e382f;
+        --text: #efe9df; --muted: #ada394; --accent: #f19a63; --accent-tint: #3d2a1c;
+        --green: #88cf9e; --green-tint: #203327; --amber: #f0c060; --amber-tint: #3a2f14;
+        --highlight: #4a3321; --violet: #c3b2ff; --violet-tint: #2a2440; --line: #4a4337;
+        --shadow: 0 6px 20px rgba(0,0,0,.45);
+        --sketch-shadow: 0 18px 48px rgba(0,0,0,.55);
+        --on-accent: #25221e;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--page);
+      color: var(--text);
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow-wrap: anywhere;
+    }
+    [hidden] { display: none !important; }
+    .warning {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--amber);
+      color: var(--amber);
+      background: var(--amber-tint);
+      white-space: pre-wrap;
+    }
+    .waiting-message { min-height: 75vh; display: grid; place-items: center; color: var(--muted); }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 32px; }
+    .heading { min-width: 0; }
+    .title-line { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+    h1 { margin: 0; font-size: 26px; line-height: 1.25; }
+    .idea-text { margin: 10px 0 0; color: var(--muted); white-space: pre-wrap; }
+    .progress { display: flex; align-items: center; justify-content: flex-end; gap: 10px; color: var(--muted); flex-shrink: 0; min-width: 0; max-width: 100%; padding-top: 6px; }
+    .progress > span:first-child { min-width: 0; }
+    .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+    .live-dot.changed { animation: live-pulse 650ms ease-out; }
+
+    /* Tree cards and dependency lines. */
+    .connectors { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; overflow: visible; }
+    .connectors path { fill: none; stroke: var(--line); stroke-width: 3; stroke-linecap: round; opacity: .8; }
+    .connectors path[data-secondary] { stroke-width: 1; stroke-dasharray: 5 5; vector-effect: non-scaling-stroke; opacity: 1; }
+    .sockets { position: absolute; width: 1px; height: 1px; overflow: visible; pointer-events: none; z-index: 2; }
+    .sockets circle { stroke: var(--card); stroke-width: 2; }
+    .idea-card, .question-card { position: relative; z-index: 1; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+    .idea-card { width: 320px; margin: 0 auto; text-align: left; padding: 18px 20px; box-shadow: var(--shadow); }
+    .caption { font-size: 12px; color: var(--muted); }
+    .idea-card strong { display: block; margin-top: 4px; }
+    .idea-summary { margin: 10px 0 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; font-size: 14px; }
+    .question-card { flex: 1 1 240px; width: 280px; min-width: 0; max-width: 320px; }
+    .question-card.asking { border: 2px solid var(--accent); box-shadow: var(--shadow); }
+    .question-card.waiting { border-style: dashed; color: var(--muted); }
+    .card-top { display: flex; align-items: flex-start; gap: 6px; }
+    .badges { display: flex; flex-wrap: wrap; gap: 5px; }
+    .badge { display: inline-block; padding: 2px 7px; border-radius: var(--radius-small); font-size: 11px; line-height: 1.5; color: var(--muted); background: var(--panel); }
+    .badge.settled, .badge.done { color: var(--green); background: var(--green-tint); }
+    .badge.asking { color: var(--accent); background: var(--accent-tint); }
+    .badge.researching { color: var(--amber); background: var(--amber-tint); }
+    .question-id { flex-shrink: 0; padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--radius-small); font-size: 11px; color: inherit; }
+    /* Question headers reserve their own strip above the decision and details. */
+    .question-card, .question-card.compact { padding: 0; }
+    .question-header { padding: 10px 12px; border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0; border-bottom: 1px solid var(--border); color: var(--text); }
+    .question-card.settled .question-header,
+    .question-card.researching .question-header { background: var(--text); color: var(--card); }
+    .question-card.asking .question-header { background: var(--accent); color: var(--on-accent); }
+    .question-header .badges { align-items: center; min-width: 0; }
+    .question-header .details-toggle { flex-shrink: 0; color: inherit; }
+    .question-card.settled .question-header .badge,
+    .question-card.researching .question-header .badge,
+    .question-card.asking .question-header .badge { background: transparent; color: inherit; }
+    .question-card.settled .question-id,
+    .question-card.researching .question-id,
+    .question-card.asking .question-id { border-color: currentColor; }
+    .question-title { font-size: 14px; font-weight: 700; margin: 6px 0 0; line-height: 1.4; }
+    .question-card.compact .question-title, .question-card.researching .question-title,
+    .question-card.waiting .question-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .question-card.asking .question-title { font-size: 15px; font-weight: 700; }
+    .question-body { padding: 12px 14px; }
+    .question-card.compact .question-body { padding: 10px 12px; }
+    .decision-title { font: 700 15px/1.4 var(--font-display); margin: 0; }
+    .question-card.compact .decision-title { font-size: 14px; font-weight: 600; padding-right: 16px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .body, .note, .answer-text { margin: 8px 0 0; font-size: 13px; white-space: pre-wrap; }
+    .body, .note { color: var(--muted); }
+    .options { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 5px; }
+    .option { display: flex; align-items: flex-start; gap: 7px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-small); font-size: 13px; }
+    .option-label { flex: 1; min-width: 0; white-space: pre-wrap; }
+    .recommended-tag { font-size: 10px; color: var(--accent); text-align: right; }
+    .option.dimmed { color: var(--muted); }
+    .option.chosen, .answer-text.chosen { color: var(--green); background: var(--green-tint); border-color: var(--green); }
+    .answer-text.chosen { border-radius: var(--radius-small); padding: 6px 8px; }
+    .check { color: var(--green); }
+    .question-card.highlight { animation: card-highlight 1.2s ease-out; }
+    @keyframes card-highlight { from { outline: 3px solid var(--accent); background: var(--highlight); } to { outline: 3px solid transparent; background: var(--card); } }
+    @keyframes live-pulse { 0%, 100% { transform: scale(1); } 35% { transform: scale(1.8); } }
+
+    /* Spec panel and smaller screens. */
+    .spec-panel { position: sticky; top: 16px; min-width: 0; max-height: calc(100vh - 32px); overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
+    .spec-panel h2 { margin: 0; font-size: 18px; }
+    .spec-hint { margin: 4px 0 20px; color: var(--muted); font-size: 13px; }
+    .spec-section { margin-top: 20px; }
+    .spec-section h3 { margin: 0 0 8px; font-size: 14px; }
+    .spec-section ol, .spec-section ul { margin: 0; padding-left: 22px; }
+    .spec-section li { margin: 0 0 8px; white-space: pre-wrap; }
+    .spec-section li .badge { margin-left: 7px; white-space: normal; }
+    .empty { margin: 0; color: var(--muted); font-size: 13px; }
+    .copy-button { margin-top: 20px; border: 1px solid var(--border); background: var(--card); color: var(--text); padding: 8px 12px; border-radius: var(--radius-small); font: inherit; cursor: pointer; }
+    .copy-button:hover { border-color: var(--accent); }
+    .copy-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .copy-buffer { position: fixed; left: -10000px; top: 0; width: 1px; height: 1px; opacity: 0; }
+
+    /* Infinite world and floating controls override the former page layout. */
+    html, body { height: 100%; overflow: hidden; }
+    button, textarea { font: inherit; color: var(--text); }
+    button { cursor: pointer; }
+    button:focus-visible, a:focus-visible, .node:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    #canvas { position: fixed; inset: 0; touch-action: none; user-select: none; overflow: hidden; cursor: grab; }
+    #canvas.dragging { cursor: grabbing; }
+    #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+    #grid { position: absolute; inset: 0; pointer-events: none; background-image: radial-gradient(circle, var(--border) var(--dot-radius, 1px), transparent var(--dot-radius, 1px)); opacity: .25; }
+    .connectors { width: 1px; height: 1px; overflow: visible; }
+    .node { position: absolute; margin: 0; cursor: grab; }
+    .question-card { width: 300px; max-width: none; }
+    .question-card.picture-options { width: 460px; }
+    .question-card.selected { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .question-card.drop-target, .idea-card.drop-target { box-shadow: 0 0 0 4px var(--accent-tint); border-color: var(--accent); }
+    .tiles { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+    .tiles .option { display: flex; flex-wrap: wrap; padding: 0 0 7px; overflow: hidden; gap: 5px; }
+    .tiles .option-label { flex-basis: 75%; padding: 0 7px; }
+    .tiles .recommended-tag { padding: 0 7px; text-align: left; }
+    .tiles .ref-note, .tiles .note-editor { width: 100%; margin: 0 7px; }
+    .tiles .check { padding-left: 7px; }
+    .tile-picture { position: relative; overflow: hidden; width: 100%; aspect-ratio: 16 / 10; background: var(--panel); border: 0; padding: 0; display: block; cursor: zoom-in; }
+    .tile-picture img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+    .empty-picture { cursor: inherit; }
+    .board-caption { position: absolute; margin: 0; white-space: nowrap; pointer-events: none; }
+    .floating { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+    .header { position: fixed; top: 16px; left: 16px; width: min(420px, calc(100vw - 408px)); margin: 0; padding: 14px 16px; display: block; z-index: 3; pointer-events: none; }
+    h1 { font-size: 21px; }
+    .idea-text { margin-top: 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .progress { justify-content: flex-start; padding-top: 8px; font-size: 12px; }
+    .spec-panel { position: fixed; top: 16px; right: 16px; bottom: 16px; width: 360px; max-height: none; padding: 0; overflow: hidden; background: var(--card); z-index: 4; }
+    #spec-content { height: 100%; overflow: auto; padding: 48px 18px 18px; user-select: text; }
+    #spec-toggle { position: absolute; right: 10px; top: 10px; border: 1px solid var(--border); background: var(--card); border-radius: var(--radius-small); padding: 4px 10px; z-index: 1; }
+    .spec-panel.collapsed { width: auto; height: auto; bottom: auto; min-width: 50px; }
+    .spec-panel.collapsed #spec-toggle { position: static; margin: 8px; }
+    .spec-panel { display: flex; flex-direction: column; }
+    #spec-content { min-height: 0; flex: 1; }
+    /* Canvas sketches keep their live preview mounted while the tree changes. */
+    .sketch-card { background: transparent; border: 1px solid transparent; border-radius: var(--radius); box-shadow: none; padding: 10px; z-index: 1; }
+    /* The label row reserves room for a counter-scaled title without remeasuring. */
+    .sketch-card-header { position: relative; display: flex; align-items: flex-end; gap: 8px; height: 45px; margin-bottom: 10px; font-size: 12px; white-space: nowrap; }
+    .sketch-card-header .caption { flex-shrink: 0; }
+    .sketch-viewport { flex-shrink: 0; color: var(--muted); font-size: 11px; }
+    .sketch-card-header strong { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 15px; }
+    .sketch-card iframe, .sketch-card img { pointer-events: none; }
+    .sketch-card-note { color: var(--muted); font-size: 12px; margin: 10px 0 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .sketch-frame { position: relative; flex: none; overflow: hidden; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--sketch-shadow); }
+    .sketch-surface { position: absolute; left: 0; top: 0; border: 0; transform-origin: 0 0; max-width: none; max-height: none; }
+    .panel-resize { position: absolute; left: 0; top: 0; bottom: 0; width: 6px; cursor: ew-resize; touch-action: none; z-index: 6; }
+    .spec-panel.collapsed #spec-content, .spec-panel.collapsed .panel-resize { display: none; }
+    .lightbox.sketch-overlay { padding: 4vh 4vw; }
+    .sketch-overlay-heading { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px; }
+    .sketch-overlay-heading a { color: white; font-size: 12px; }
+    .sketch-overlay h2 { margin: 0; font-size: 18px; }
+    .sketch-overlay .sketch-surface { max-width: none; max-height: none; }
+    .sketch-overlay iframe { pointer-events: auto; }
+    /* Live research and report reading use the existing research colour family. */
+    .research-chip-group { min-width: 0; max-width: 220px; }
+    .research-steps { margin-top: 6px; color: var(--muted); font-size: 12px; }
+    .research-step { margin: 3px 0; }
+    .research-steps.latest .research-step { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .step-dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--amber); animation: research-pulse 1.4s ease-in-out infinite; }
+    @keyframes research-pulse { 50% { opacity: .3; } }
+    @media (prefers-reduced-motion: reduce) { .step-dot { animation: none; } }
+    .report-card { width: 240px; padding: 12px; background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--violet); border-radius: var(--radius); box-shadow: var(--shadow); }
+    .report-card h3 { margin: 8px 0; font-size: 13px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .report-card .report-finding { color: var(--muted); font-size: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; }
+    .report-card footer { color: var(--muted); font-size: 12px; margin-top: 8px; }
+    .report-card.stacked { padding: 8px 10px; background: var(--violet-tint); border: 0; border-left: 3px solid var(--violet); box-shadow: none; }
+    .report-card.stacked .report-meta { display: block; margin-bottom: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .report-card.stacked h3 { display: block; margin: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .read-report { color: var(--violet); background: transparent; border: 1px solid var(--border); border-radius: var(--radius-small); padding: 4px 8px; margin-top: 8px; }
+    .reader-column { width: min(760px, 100%); max-height: 88vh; overflow: auto; padding: 24px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); color: var(--text); font-size: 15px; line-height: 1.65; user-select: text; }
+    .reader-column h1, .reader-column h2, .reader-column h3, .reader-column h4 { margin: 20px 0 10px; line-height: 1.3; }
+    .reader-column header h2 { margin-top: 6px; }
+    .reader-column a { color: var(--accent); }
+    .lightbox .reader-column p { margin: 10px 0; white-space: pre-wrap; text-align: left; max-height: none; }
+    .reader-column ul, .reader-column ol { padding-left: 24px; }
+    .reader-column pre { padding: 12px; background: var(--panel); overflow-x: auto; border-radius: var(--radius-small); }
+    .reader-column code { background: var(--panel); font-size: 13px; }
+    .reader-column blockquote { margin: 12px 0; padding-left: 14px; border-left: 3px solid var(--violet); color: var(--muted); }
+    .reader-column .table-scroll { overflow-x: auto; }
+    .reader-column table { border-collapse: collapse; width: 100%; }
+    .reader-column th, .reader-column td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+    .reader-column hr { border: 0; border-top: 1px solid var(--border); }
+    /* Resize strips affect hit testing only; grips reserve no layout space. */
+    .node-resize { position: absolute; border: 0; padding: 0; background: transparent; color: var(--muted); touch-action: none; z-index: 4; }
+    /* Grab areas keep their size on screen when the board is zoomed out. */
+    .resize-edge { --strip: min(calc(8px / var(--z, 1)), 24px); }
+    .resize-w, .resize-e { top: 8px; bottom: 8px; width: var(--strip); cursor: ew-resize; }
+    .resize-w { left: calc(var(--strip) / -2); }
+    .resize-e { right: calc(var(--strip) / -2); }
+    .resize-n, .resize-s { left: 8px; right: 8px; height: var(--strip); cursor: ns-resize; }
+    .resize-n { top: calc(var(--strip) / -2); }
+    .resize-s { bottom: calc(var(--strip) / -2); }
+    .resize-corner { --grip: min(calc(16px / var(--z, 1)), 40px); width: var(--grip); height: var(--grip); opacity: 0; }
+    .resize-nw, .resize-ne { top: 0; }
+    .resize-sw, .resize-se { bottom: 0; }
+    .resize-nw, .resize-sw { left: 0; }
+    .resize-ne, .resize-se { right: 0; }
+    .resize-nw, .resize-se { cursor: nwse-resize; }
+    .resize-ne, .resize-sw { cursor: nesw-resize; }
+    .resize-corner::after { content: ''; position: absolute; inset: 30%; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; }
+    .resize-nw::after { transform: rotate(180deg); }
+    .resize-ne::after { transform: rotate(270deg); }
+    .resize-sw::after { transform: rotate(90deg); }
+    .node:hover > .resize-corner, .node:focus-within > .resize-corner { opacity: 1; }
+    @media (pointer: coarse) { .resize-edge { --strip: min(calc(16px / var(--z, 1)), 48px); } .resize-se { opacity: .4; } }
+    .toolbar { position: fixed; bottom: 16px; left: 16px; display: flex; align-items: center; gap: 4px; padding: 6px; z-index: 5; }
+    .toolbar button, .icon-button { border: 0; background: transparent; padding: 6px 9px; border-radius: var(--radius-small); }
+    .toolbar button:hover, .icon-button:hover { background: var(--panel); }
+    #zoom-percent { min-width: 45px; text-align: center; font-size: 12px; }
+    .warning, .waiting-message, .toast, .drop-hint { position: fixed; left: 50%; transform: translateX(-50%); bottom: 76px; z-index: 8; padding: 10px 16px; max-width: min(600px, calc(100vw - 32px)); min-height: 0; text-align: center; white-space: pre-wrap; pointer-events: none; }
+    .warning { bottom: 126px; border: 1px solid var(--amber); border-radius: var(--radius); }
+    .drop-hint { bottom: 180px; color: var(--accent); }
+    .reference-card { width: 200px; padding: 8px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); z-index: 1; }
+    /* Research notes have their own status colours and retain finding line breaks. */
+    .research-card { width: 240px; padding: 10px; background: var(--card); border: 1px solid var(--violet); border-radius: var(--radius); z-index: 1; }
+    .research-card.todo { border-style: dashed; color: var(--muted); }
+    .research-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+    .badge.research-todo, .badge.research-done { color: var(--violet); background: var(--violet-tint); }
+    .badge.research-running { color: var(--amber); background: var(--amber-tint); }
+    .research-topic { margin: 8px 0 0; font-size: 13px; font-weight: 600; }
+    .research-finding { margin: 6px 0 0; font-size: 12px; white-space: pre-wrap; }
+    .research-sources { margin: 6px 0 0; padding-left: 16px; font-size: 12px; }
+    .research-sources a { color: var(--violet); }
+    .research-block + .research-block { margin-top: 12px; }
+    /* Decisions, inline research, and reference connectors keep the canvas compact. */
+    .decision-check { display: inline; margin-right: 6px; }
+    .question-card.compact .dependency-chip, .question-card.compact .research-chip-group.done { display: none; }
+    .question-card.compact .research-chips:not(:has(.todo, .running)), .question-card.compact .research-panel.done { display: none; }
+    .details-toggle { margin-left: auto; border: 0; background: transparent; color: var(--muted); padding: 0 5px; }
+    .dependency-chip { margin-top: 8px; padding: 2px 6px; border-radius: var(--radius-small); background: var(--panel); color: var(--muted); font-size: 11px; }
+    .research-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+    .research-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; min-width: 0; padding: 3px 6px; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--panel); color: var(--muted); font-size: 11px; text-align: left; }
+    .research-chip-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .research-dot { flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--violet); }
+    .research-dot.running { background: var(--amber); }
+    .research-chip.highlight { animation: card-highlight 1.2s ease-out; }
+    .research-panel { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
+    .connector-handle { position: absolute; top: calc(50% - 5px); left: -6px; width: 10px; height: 10px; padding: 0; border: 2px solid var(--card); border-radius: 50%; background: var(--socket-color, var(--line)); cursor: crosshair; z-index: 6; }
+    /* Left-to-right references receive their cable through the top edge. */
+    :root[data-flow="lr"] .connector-handle { top: -6px; left: calc(50% - 5px); }
+    .disconnect-ref { position: absolute; top: 28px; left: 4px; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--card); padding: 2px 6px; opacity: 0; z-index: 2; }
+    .reference-card:hover .disconnect-ref, .reference-card:focus-within .disconnect-ref, .option:hover .disconnect-ref, .option:focus-within .disconnect-ref { opacity: 1; }
+    @media (prefers-reduced-motion: reduce) { .research-chip.highlight { animation: none; } }
+    .reference-picture { border: 0; padding: 0; width: 100%; background: var(--panel); border-radius: var(--radius-small); cursor: zoom-in; display: block; }
+    .reference-picture img { display: block; width: 100%; height: 160px; object-fit: contain; }
+    .ref-note { margin: 7px 0 0; font-size: 12px; white-space: pre-wrap; }
+    button.ref-note { display: block; text-align: left; border: 0; padding: 0; background: none; width: 100%; cursor: text; }
+    .ref-note.placeholder { color: var(--muted); }
+    .ref-url { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--muted); }
+    .ref-open { display: inline-block; margin-top: 5px; font-size: 12px; color: var(--accent); }
+    .yours { position: absolute; top: 4px; right: 4px; z-index: 2; }
+    .tiles .yours { position: static; margin-left: 7px; }
+    .delete-ref { position: absolute; top: 4px; left: 4px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-small); opacity: 0; padding: 2px 6px; z-index: 2; }
+    .reference-card:hover .delete-ref, .reference-card:focus-within .delete-ref, .option:hover .delete-ref, .option:focus-within .delete-ref { opacity: 1; }
+    .tiles .option { position: relative; }
+    .note-editor { width: 100%; resize: vertical; min-height: 64px; max-height: 240px; border: 1px solid var(--accent); background: var(--card); margin-top: 7px; font-size: 12px; user-select: text; touch-action: auto; }
+    .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 5vh 5vw; color: white; }
+    .lightbox img { max-width: 90vw; max-height: 80vh; object-fit: contain; }
+    .lightbox p { margin: 0; white-space: pre-wrap; text-align: center; max-height: 10vh; overflow: auto; }
+    .lightbox button { position: absolute; right: 16px; top: 16px; color: white; background: transparent; border: 1px solid white; border-radius: var(--radius-small); padding: 6px 12px; }
+    .node.highlight { animation: card-highlight 1.2s ease-out; }
+    /* Far labels change paint only; normal content continues to reserve its space. */
+    .far-label { display: none; position: absolute; inset: 0; padding: calc(8px / var(--z, 1)); overflow: hidden; pointer-events: none; font-size: min(calc(12px / var(--z, 1)), 36px); font-weight: 600; line-height: 1.25; }
+    #world.far .question-card > :not(.far-label):not(.node-resize),
+    #world.far .idea-card > :not(.far-label):not(.node-resize) { visibility: hidden; }
+    #world.far .question-card > .far-label, #world.far .idea-card > .far-label { display: block; }
+    #world.far .question-card.settled > .far-label { color: var(--green); }
+    #world.far .question-card.asking > .far-label { color: var(--accent); }
+    #world.far .question-card.researching > .far-label { color: var(--amber); }
+    #world.far .question-card.waiting > .far-label { color: var(--muted); }
+    #world.far .report-card.stacked > :not(.node-resize) { visibility: hidden; }
+    #world.far .sketch-card-header > :not(.far-label), #world.far .sketch-card-note { visibility: hidden; }
+    #world.far .sketch-card-header > .far-label { display: block; padding: 0; white-space: nowrap; text-overflow: ellipsis; }
+    @media (max-width: 899px) {
+      .header { width: min(420px, calc(100vw - 32px)); padding: 10px 12px; }
+      .header .title-line { flex-wrap: nowrap; gap: 8px; }
+      .header h1 { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .header .badge { flex-shrink: 0; }
+      .header .idea-text { display: none; }
+      .header .progress { padding-top: 4px; }
+      .header .progress > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .panel-resize { display: none; }
+      .spec-panel { top: auto; left: 16px; bottom: 16px; right: 16px; width: auto; height: 60vh; max-height: 60%; }
+      .spec-panel.collapsed { left: auto; bottom: 16px; top: auto; }
+      .toolbar { bottom: 16px; }
+    }
+
+    /* Keep the card shadows when a reference is dragged over them. */
+    .idea-card.drop-target, .question-card.asking.drop-target { box-shadow: var(--shadow); }
+
+    /* Display type and the compact decision cards. */
+    .header h1,
+    .idea-card > strong,
+    .idea-card > .far-label,
+    .sketch-card-header strong,
+    .sketch-card-header .far-label { font-family: var(--font-display); }
+    .idea-card > strong { font-size: 22px; line-height: 1.25; }
+    .question-card.compact { background: var(--card); border: 1px solid var(--border); box-shadow: none; padding: 0; }
+  </style>
+</head>
+<body>
+  <main id="canvas"><div id="grid"></div><div id="world"></div></main>
+  <div id="board" hidden>
+    <header id="header" class="header floating"></header>
+    <aside id="spec-panel" class="spec-panel floating">
+      <div id="panel-resize" class="panel-resize" aria-hidden="true"></div>
+      <button id="spec-toggle" type="button"></button>
+      <div id="spec-content"></div>
+    </aside>
+    <nav id="toolbar" class="toolbar floating"></nav>
+  </div>
+  <div id="warning" class="warning" role="status" hidden></div>
+  <div id="waiting" class="waiting-message floating" role="status"></div>
+  <div id="toast" class="toast floating" role="status" hidden></div>
+  <div id="drop-hint" class="drop-hint floating" role="status" hidden></div>
+  <div id="lightbox" class="lightbox" role="dialog" aria-modal="true" hidden></div>
+  <div id="reader" class="lightbox" role="dialog" aria-modal="true" hidden></div>
+  <script>
+    // UI labels, including Markdown headings.
+    const LABELS = {
+      en: {
+        flowTd: 'Flow: top-down. Switch to left to right.', flowLr: 'Flow: left to right. Switch to top-down.',
+        idea: 'Idea', round: 'Round {n}', settled: 'Settled', asking: 'Asking now',
+        researching: 'Researching', waiting: 'Waiting', reopened: 'Reopened',
+        recommended: 'Recommended', answer: 'Answer', waitingOn: 'Waiting on',
+        researchingHint: 'The agent is looking this up.', spec: 'Spec',
+        specHint: 'Fills in as decisions settle.', decided: 'Decided',
+        architecture: 'Architecture', open: 'Open', emptyDecided: 'Nothing decided yet.',
+        emptyArchitecture: 'No architecture notes yet.', emptyOpen: 'Nothing open.',
+        copySpec: 'Copy spec', copied: 'Copied', done: 'Done',
+        progress: '{done} of {total} settled', waiting4file: 'Waiting for the session file…',
+        warnUnreadable: 'The session file could not be read. Showing the last good state.',
+        mdDecisions: 'Decisions', mdArchitecture: 'Architecture', mdOpen: 'Open questions',
+        live: 'Live', references: 'References', yours: 'Yours', addNote: 'Add a note',
+        dropHint: 'Drop to add a reference', refAdded: 'Reference added', refFailed: 'Could not add the reference',
+        needServer: 'Adding references needs the board server.', badType: 'Only PNG, JPEG, GIF and WebP pictures can be added.',
+        fit: 'Fit to screen', zoomIn: 'Zoom in', zoomOut: 'Zoom out', resetLayout: 'Reset layout',
+        toggleSpec: 'Show or hide the spec', close: 'Close', openLink: 'Open link', deleteRef: 'Delete reference', mdReferences: 'References',
+        focusRound: 'Go to the current round', toolbar: 'Board controls', research: 'Research',
+        researchTodo: 'To research', researchRunning: 'Researching', researchDone: 'Researched',
+        researchFindings: 'Research findings', toResearch: 'To research', mdResearch: 'Research', mdToResearch: 'To research', qPrefix: 'Q', alsoDependsOn: 'Also depends on {ids}',
+        expand: 'Show details', collapse: 'Hide details', connect: 'Connect to a card', disconnect: 'Disconnect', sketch: 'Sketch', resize: 'Resize', viewportSize: '{width} × {height}', openSketch: 'Open in a new tab', report: 'Research report', sourceCount: '{count} sources', loading: 'Loading…', truncated: 'Report truncated at 400,000 characters.', readReport: 'Read the report', mdSketches: 'Sketches'
+      },
+      tr: {
+        flowTd: 'Akış: yukarıdan aşağı. Soldan sağa çevir.', flowLr: 'Akış: soldan sağa. Yukarıdan aşağı çevir.',
+        idea: 'Fikir', round: 'Tur {n}', settled: 'Kapandı', asking: 'Şu an soruluyor',
+        researching: 'Araştırılıyor', waiting: 'Bekliyor', reopened: 'Yeniden açıldı',
+        recommended: 'Öneri', answer: 'Cevap', waitingOn: 'Şunu bekliyor',
+        researchingHint: 'Ajan bu konuyu araştırıyor.', spec: 'Spec',
+        specHint: 'Kararlar netleştikçe tamamlanır.', decided: 'Karar verilenler',
+        architecture: 'Mimari', open: 'Açık kalanlar', emptyDecided: 'Henüz karar verilmedi.',
+        emptyArchitecture: 'Henüz mimari notu yok.', emptyOpen: 'Açık kalan soru yok.',
+        copySpec: "Spec'i kopyala", copied: 'Kopyalandı', done: 'Bitti',
+        progress: '{total} sorudan {done} tanesi kapandı', waiting4file: 'Oturum dosyası bekleniyor…',
+        warnUnreadable: 'Oturum dosyası okunamadı. Son geçerli durum gösteriliyor.',
+        mdDecisions: 'Kararlar', mdArchitecture: 'Mimari', mdOpen: 'Açık kalan sorular',
+        live: 'Canlı', references: 'Referanslar', yours: 'Sizin', addNote: 'Not ekle',
+        dropHint: 'Referans eklemek için bırakın', refAdded: 'Referans eklendi', refFailed: 'Referans eklenemedi',
+        needServer: 'Referans eklemek için pano sunucusu gerekir.', badType: 'Yalnızca PNG, JPEG, GIF ve WebP görselleri eklenebilir.',
+        fit: 'Ekrana sığdır', zoomIn: 'Yakınlaştır', zoomOut: 'Uzaklaştır', resetLayout: 'Yerleşimi sıfırla',
+        toggleSpec: 'Spec panelini göster veya gizle', close: 'Kapat', openLink: 'Bağlantıyı aç', deleteRef: 'Referansı sil', mdReferences: 'Referanslar',
+        focusRound: 'Güncel tura git', toolbar: 'Pano denetimleri', research: 'Araştırma',
+        researchTodo: 'Araştırılacak', researchRunning: 'Araştırılıyor', researchDone: 'Araştırıldı',
+        researchFindings: 'Araştırma bulguları', toResearch: 'Araştırılacaklar', mdResearch: 'Araştırma', mdToResearch: 'Araştırılacaklar', qPrefix: 'S', alsoDependsOn: '{ids} ile de bağlantılı',
+        expand: 'Ayrıntıları göster', collapse: 'Ayrıntıları gizle', connect: 'Bir karta bağla', disconnect: 'Bağlantıyı kes', sketch: 'Taslak', resize: 'Boyutlandır', viewportSize: '{width} × {height}', openSketch: 'Yeni sekmede aç', report: 'Araştırma raporu', sourceCount: '{count} kaynak', loading: 'Yükleniyor…', truncated: 'Rapor 400.000 karakterde kesildi.', readReport: 'Raporu oku', mdSketches: 'Taslaklar'
+      }
+    };
+
+    // The preferred flow is shared across sessions; each flow keeps its own positions.
+    const flowKey = 'grill-flow';
+    let flow = readFlow();
+    document.documentElement.dataset.flow = flow;
+
+    const LAYOUT = {
+      sketchWidth: { portrait: 380, landscape: 720 }, questionWidth: 300, ideaWidth: 380,
+      gapX: 28, gapY: 64, lrGapX: 96, lrGapY: 28
+    };
+
+    // Normalize optional and malformed fields at the boundary.
+    function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; }
+    function string(value) { return typeof value === 'string' ? value : typeof value === 'number' || typeof value === 'boolean' ? String(value) : ''; }
+    function array(value) { return Array.isArray(value) ? value : []; }
+    function questionStatus(value) { return ['settled', 'asking', 'researching', 'waiting'].includes(value) ? value : 'waiting'; }
+    function normalizeSession(value) {
+      const source = object(value);
+      return {
+        lang: string(source.lang), title: string(source.title), idea: string(source.idea),
+        status: string(source.status), labels: object(source.labels), refs: normalizeRefs(source.refs, false),
+        sketches: normalizeSketches(source.sketches),
+        architecture: Array.from(array(source.architecture), string), research: normalizeResearch(source.research),
+        questions: Array.from(array(source.questions), value => {
+          const q = object(value);
+          const answer = object(q.answer);
+          const round = typeof q.round === 'number' ? q.round : typeof q.round === 'string' && q.round.trim() ? Number(q.round) : NaN;
+          return {
+            id: string(q.id), round: Number.isFinite(round) ? round : '',
+            title: string(q.title), body: string(q.body), status: questionStatus(q.status),
+            reopened: q.reopened === true, dependsOn: Array.from(array(q.dependsOn), string),
+            options: Array.from(array(q.options), value => {
+              const option = object(value);
+              return { id: string(option.id), label: string(option.label) };
+            }),
+            recommended: q.recommended == null ? null : string(q.recommended),
+            recommendation: string(q.recommendation), decision: string(q.decision),
+            answer: { option: answer.option == null ? null : string(answer.option), text: string(answer.text) }
+          };
+        })
+      };
+    }
+    // Sketch geometry has bounded defaults; destinations are checked before rendering.
+    function normalizeSketches(value) {
+      function dimension(value, fallback) { return Math.max(200, Math.min(4000, typeof value === 'number' && Number.isFinite(value) ? value : fallback)); }
+      return array(value).map(value => {
+        const sketch = object(value);
+        return { id: string(sketch.id), title: string(sketch.title), src: string(sketch.src),
+          rev: typeof sketch.rev === 'number' && Number.isFinite(sketch.rev) ? sketch.rev : 0,
+          width: dimension(sketch.width, 1280), height: dimension(sketch.height, 800), note: string(sketch.note) };
+      });
+    }
+    // Research sources accept only complete HTTP(S) URLs, never relative destinations.
+    function normalizeResearch(value) {
+      return array(value).map(value => {
+        const note = object(value);
+        return { id: string(note.id), target: string(note.target).split(':')[0], topic: string(note.topic),
+          status: ['todo', 'running', 'done'].includes(note.status) ? note.status : 'todo', finding: string(note.finding), report: string(note.report),
+          sources: array(note.sources).map(value => {
+            const source = object(value);
+            return { title: string(source.title), url: singleWebUrl(source.url) };
+          }).filter(source => source.url) };
+      });
+    }
+    function sourceTitle(source) { return source.title || new URL(source.url).hostname; }
+    function researchNodeId(note) { return 'research:' + note.id; }
+    function sessionLabels(session) {
+      const base = LABELS[labelLanguage(session.lang)];
+      const labels = { ...base };
+      for (const key of Object.keys(base)) {
+        if (Object.prototype.hasOwnProperty.call(session.labels, key) && typeof session.labels[key] === 'string') labels[key] = session.labels[key];
+      }
+      return labels;
+    }
+    function interpolate(template, values) {
+      return template.replace(/\{(\w+)\}/g, (match, key) => Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : match);
+    }
+    function decisionText(q) {
+      if (q.decision) return q.decision;
+      const chosen = q.answer.option === null ? null : q.options.find(option => option.id === q.answer.option);
+      return q.title + ': ' + ((chosen && chosen.label) || q.answer.text);
+    }
+
+    // Public Markdown builder shares the panel's decision fallback.
+    function buildSpecMarkdown(session, labels, userRefs) {
+      const data = normalizeSession(session);
+      const text = { ...sessionLabels(data), ...object(labels) };
+      const parts = ['# ' + data.title];
+      if (data.idea) parts.push(data.idea);
+      const decisions = data.questions.filter(q => q.status === 'settled');
+      const open = data.questions.filter(q => q.status !== 'settled');
+      if (decisions.length) parts.push('## ' + text.mdDecisions, decisions.map((q, i) => (i + 1) + '. ' + decisionText(q)).join('\n'));
+      if (data.architecture.length) parts.push('## ' + text.mdArchitecture, data.architecture.map(line => '- ' + line).join('\n'));
+      const findings = data.research.filter(note => note.status === 'done');
+      const pending = data.research.filter(note => note.status !== 'done');
+      if (findings.length) {
+        const blocks = findings.map(note => {
+          const block = ['### ' + note.topic];
+          if (note.finding) block.push(note.finding);
+          if (note.report) block.push(text.report + ": " + note.report);
+          if (note.sources.length) block.push(note.sources.map(source => '- ' + sourceTitle(source) + ' (' + source.url + ')').join('\n'));
+          return block.join('\n\n');
+        });
+        parts.push('## ' + text.mdResearch, blocks.join('\n\n'));
+      }
+      if (pending.length) parts.push('## ' + text.mdToResearch, pending.map(note => '- ' + note.topic).join('\n'));
+      if (open.length) parts.push('## ' + text.mdOpen, open.map(q => '- ' + q.title).join('\n'));
+      const refs = data.refs.concat(normalizeRefs(userRefs, true));
+      if (refs.length) parts.push('## ' + text.mdReferences, refs.map(ref => '- ' + ((ref.user ? ref.note : ref.caption) || ref.name || fileName(ref.src)) + ' (' + ref.src + ')').join('\n'));
+      if (data.sketches.length) parts.push('## ' + text.mdSketches, data.sketches.map(sketch => '- ' + sketch.title + ' (' + sketch.src + ')').join('\n'));
+      return parts.join('\n\n').trimEnd() + '\n';
+    }
+
+    // DOM helpers always insert session content as text.
+    function element(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+    function statusBadge(status, labels) { return element('span', 'badge ' + status, labels[status]); }
+    function farLabel(text) {
+      const label = element('span', 'far-label', text); label.setAttribute('aria-hidden', 'true'); return label;
+    }
+
+    // Live steps update persistent text slots, never rebuilding a question card.
+    function bindSteps(parent, id, latest) {
+      const region = element('div', 'research-steps' + (latest ? ' latest' : ''));
+      const slots = Array.from({ length: latest ? 1 : 3 }, () => {
+        const line = element('p', 'research-step');
+        const dot = element('span', 'step-dot'); dot.setAttribute('aria-hidden', 'true');
+        const text = element('span'); line.append(dot, text); region.append(line);
+        return { line, dot, text };
+      });
+      const entry = { region, slots, latest };
+      if (!stepViews.has(id)) stepViews.set(id, []);
+      stepViews.get(id).push(entry); parent.append(region); updateStepView(entry, researchSteps.get(id) || []);
+    }
+    function updateStepView(entry, lines) {
+      const shown = entry.latest ? lines.slice(-1) : lines;
+      entry.region.hidden = !shown.length;
+      entry.slots.forEach((slot, index) => {
+        slot.line.hidden = index >= shown.length;
+        slot.text.textContent = shown[index] || '';
+        slot.dot.hidden = index !== shown.length - 1;
+      });
+    }
+    function syncResearchSteps() {
+      const active = serverMode && /^https?:$/.test(window.location.protocol) && currentSession && currentSession.research.some(note => note.status === 'running');
+      if (!active && stepsTimer !== null) { clearInterval(stepsTimer); stepsTimer = null; }
+      if (active && stepsTimer === null) { pollResearchSteps(); stepsTimer = setInterval(pollResearchSteps, 1000); }
+    }
+    async function pollResearchSteps() {
+      if (!serverMode || !/^https?:$/.test(window.location.protocol) || !currentSession) return;
+      const running = currentSession.research.filter(note => note.status === 'running');
+      await Promise.all(running.map(async note => {
+        if (stepsFetching.has(note.id)) return;
+        stepsFetching.add(note.id);
+        let lines = [];
+        try {
+          const response = await fetch(new URL('research/' + encodeURIComponent(note.id) + '.log', sessionUrl), { cache: 'no-store' });
+          if (response.ok) lines = (await response.text()).split(/\r?\n/).map(line => line.trim()).filter(Boolean).slice(-3).map(line => line.slice(0, 120));
+        } catch (_) {}
+        finally { stepsFetching.delete(note.id); }
+        if (!currentSession.research.some(current => current.id === note.id && current.status === 'running')) return;
+        if (JSON.stringify(lines) === JSON.stringify(researchSteps.get(note.id) || [])) return;
+        const heights = new Map([...nodeRecords].map(([id, record]) => [id, record.element.offsetHeight]));
+        researchSteps.set(note.id, lines);
+        for (const entry of stepViews.get(note.id) || []) updateStepView(entry, lines);
+        if (!nodeResize && [...nodeRecords].some(([id, record]) => heights.get(id) !== record.element.offsetHeight)) measureAndLayout();
+      }));
+    }
+
+    // Reports share ordinary node dragging, sizing, and safe research source links.
+    function reportButton(note) { return button(currentLabels.readReport, currentLabels.readReport, () => openReader(note.id), 'read-report'); }
+    function reportCard(note, stacked) {
+      const card = element('article', 'report-card' + (stacked ? ' stacked' : '')); card.tabIndex = 0;
+      if (stacked) card.append(element('span', 'caption report-meta', currentLabels.report + ' · ' + interpolate(currentLabels.sourceCount, { count: note.sources.length })));
+      else card.append(element('span', 'caption', currentLabels.report));
+      card.append(element('h3', '', note.topic));
+      if (!stacked && note.finding) card.append(element('p', 'report-finding', note.finding));
+      if (!stacked && note.sources.length) card.append(element('footer', '', interpolate(currentLabels.sourceCount, { count: note.sources.length })));
+      card.addEventListener('keydown', event => { if (event.key === 'Enter' && event.target === card) { event.preventDefault(); openReader(note.id); } });
+      return card;
+    }
+    function closeReader() {
+      const focused = readerState && readerState.focused;
+      readerState = null; reader.hidden = true; reader.replaceChildren();
+      if (focused && focused.isConnected) focused.focus({ preventScroll: true });
+    }
+    async function openReader(id) {
+      const note = currentSession && currentSession.research.find(note => note.id === id);
+      if (!note || !safeSource(note.report)) return;
+      recordInteraction();
+      const state = { id, focused: document.activeElement }; readerState = state;
+      const column = element('article', 'reader-column'); state.column = column;
+      const head = element('header');
+      const link = element('a', '', currentLabels.openSketch); link.href = new URL(safeSource(note.report), sessionUrl).href;
+      link.target = '_blank'; link.rel = 'noopener noreferrer';
+      head.append(element('span', 'caption', currentLabels.report), element('h2', '', note.topic), link);
+      const body = element('div'); state.body = body;
+      const sources = element('section'); appendResearchContent(sources, { ...note, finding: '' });
+      column.append(head, body, sources);
+      const close = button('×', currentLabels.close, closeReader);
+      reader.setAttribute('aria-label', note.topic || currentLabels.report);
+      reader.replaceChildren(close, column); reader.hidden = false; close.focus({ preventScroll: true });
+      const canRead = serverMode && /^https?:$/.test(window.location.protocol);
+      if (canRead) body.textContent = currentLabels.loading;
+      else body.append(element('p', 'research-finding', note.finding));
+      if (!canRead) return;
+      try {
+        const response = await fetch(link.href, { cache: 'no-store' });
+        if (!response.ok) throw new Error(String(response.status));
+        const text = await response.text();
+        if (readerState !== state) return;
+        // The header already shows the topic, and a report lists its own sources.
+        const blocks = parseMarkdown(text);
+        if (blocks[0] && blocks[0].type === 'heading' && blocks[0].level === 1) blocks.shift();
+        body.replaceChildren(renderMarkdown(blocks)); sources.hidden = true;
+      } catch (_) { if (readerState === state) body.replaceChildren(element('p', 'research-finding', note.finding)); }
+    }
+
+    // A pure block parser treats unsupported markup, including HTML, as text.
+    function parseMarkdown(text) {
+      text = string(text);
+      const truncated = text.length > 400000;
+      const lines = text.slice(0, 400000).replace(/\r\n?/g, '\n').split('\n');
+      const blocks = []; let i = 0;
+      function listMatch(line) { return /^(\s*)([-+*]|\d+[.)])\s+(.+)$/.exec(line); }
+      function cells(line) { return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim()); }
+      function tableStart(index) { return index + 1 < lines.length && lines[index].includes('|') && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index + 1]); }
+      function rule(line) { return /^\s{0,3}(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})$/.test(line); }
+      function special(index) { return rule(lines[index]) || /^(#{1,4}\s|\s*```|\s*~~~|\s*>|\s*(?:-{3,}|\*{3,}|_{3,})\s*$)/.test(lines[index]) || listMatch(lines[index]) || tableStart(index); }
+      while (i < lines.length) {
+        if (!lines[i].trim()) { i++; continue; }
+        const heading = /^(#{1,4})\s+(.+?)(?:\s+#+\s*)?$/.exec(lines[i]);
+        const fence = /^\s*(`{3,}|~{3,})(.*)$/.exec(lines[i]);
+        if (heading) { blocks.push({ type: 'heading', level: heading[1].length, text: heading[2] }); i++; }
+        else if (fence) {
+          const code = []; const marker = fence[1][0], length = fence[1].length; i++;
+          while (i < lines.length && !new RegExp('^\\s*' + marker + '{' + length + ',}\\s*$').test(lines[i])) code.push(lines[i++]);
+          if (i < lines.length) i++;
+          blocks.push({ type: 'code', text: code.join('\n'), language: fence[2].trim() });
+        } else if (rule(lines[i])) { blocks.push({ type: 'hr' }); i++; }
+        else if (tableStart(i)) {
+          const header = cells(lines[i]); i += 2; const rows = [];
+          while (i < lines.length && lines[i].trim() && lines[i].includes('|')) rows.push(cells(lines[i++]));
+          blocks.push({ type: 'table', header, rows });
+        } else if (/^\s*>/.test(lines[i])) {
+          const quote = []; while (i < lines.length && /^\s*>/.test(lines[i])) quote.push(lines[i++].replace(/^\s*>\s?/, ''));
+          blocks.push({ type: 'blockquote', text: quote.join('\n') });
+        } else if (listMatch(lines[i])) {
+          const first = listMatch(lines[i]); const indent = first[1].length; const ordered = /^\d/.test(first[2]); const items = [];
+          while (i < lines.length) {
+            const match = listMatch(lines[i]); if (!match || match[1].length < indent) break;
+            if (match[1].length === indent) {
+              if (/^\d/.test(match[2]) !== ordered) break;
+              items.push({ text: match[3], children: [] }); i++;
+            } else if (items.length && match[1].length <= indent + 4) {
+              items[items.length - 1].children.push({ text: match[3], ordered: /^\d/.test(match[2]) }); i++;
+            } else break;
+          }
+          blocks.push({ type: ordered ? 'orderedList' : 'list', items, start: ordered ? parseInt(first[2], 10) : 1 });
+        } else {
+          const paragraph = [lines[i++]];
+          while (i < lines.length && lines[i].trim() && !special(i)) paragraph.push(lines[i++]);
+          blocks.push({ type: 'paragraph', text: paragraph.join('\n') });
+        }
+      }
+      if (truncated) blocks.push({ type: 'truncated' });
+      return blocks;
+    }
+
+    // Inline tokens create text and safe anchors; report HTML never becomes markup.
+    function appendMarkdownInline(parent, text, depth) {
+      let i = 0, plain = ''; depth = depth || 0;
+      function flush() { if (plain) { parent.append(element('span', '', plain)); plain = ''; } }
+      while (i < text.length) {
+        const tail = text.slice(i); let token = null;
+        if (depth < 8) {
+          for (const [pattern, tag] of [[/^\*\*([^\n]+?)\*\*/, 'strong'], [/^__([^\n]+?)__/, 'strong'], [/^\*([^*\n]+)\*/, 'em'], [/^_([^_\n]+)_/, 'em'], [/^`([^`\n]+)`/, 'code']]) {
+            const match = pattern.exec(tail);
+            if (match) { token = { length: match[0].length, tag, text: match[1] }; break; }
+          }
+        }
+        const start = /^\[([^\]\n]+)\]\(/.exec(tail);
+        if (!token && start) {
+          let end = start[0].length, balance = 1;
+          while (end < tail.length && tail[end] !== '\n' && balance) { if (tail[end] === '(') balance++; if (tail[end] === ')') balance--; end++; }
+          if (!balance) {
+            const raw = tail.slice(0, end), url = tail.slice(start[0].length, end - 1);
+            if (singleWebUrl(url)) token = { length: end, tag: 'a', text: start[1], url };
+            else { plain += raw; i += end; continue; }
+          }
+        }
+        if (!token) {
+          const bare = /^https?:\/\/[^\s<>]+/.exec(tail);
+          if (bare) {
+            let url = bare[0].replace(/[.,;!?]+$/, '');
+            while (url.endsWith(')') && (url.match(/\)/g) || []).length > (url.match(/\(/g) || []).length) url = url.slice(0, -1);
+            if (singleWebUrl(url)) token = { length: url.length, tag: 'a', text: url, url };
+          }
+        }
+        if (!token) { plain += text[i++]; continue; }
+        flush(); const node = element(token.tag);
+        if (token.tag === 'a') { node.href = token.url; node.target = '_blank'; node.rel = 'noopener noreferrer'; }
+        if (token.tag === 'code' || token.tag === 'a') node.textContent = token.text;
+        else appendMarkdownInline(node, token.text, token.tag === 'a' ? 8 : depth + 1);
+        parent.append(node); i += token.length;
+      }
+      flush();
+    }
+    function renderMarkdown(blocks) {
+      const root = element('div', 'report-markdown');
+      for (const block of blocks) {
+        let node;
+        if (block.type === 'list' || block.type === 'orderedList') {
+          node = element(block.type === 'list' ? 'ul' : 'ol');
+          if (block.type === 'orderedList') node.start = block.start;
+          for (const item of block.items) {
+            const row = element('li'); appendMarkdownInline(row, item.text);
+            let nested = null, ordered = null;
+            for (const child of item.children) {
+              if (!nested || ordered !== child.ordered) { ordered = child.ordered; nested = element(ordered ? 'ol' : 'ul'); row.append(nested); }
+              const leaf = element('li'); appendMarkdownInline(leaf, child.text); nested.append(leaf);
+            }
+            node.append(row);
+          }
+        } else if (block.type === 'table') {
+          node = element('div', 'table-scroll'); const table = element('table'), head = element('thead'), body = element('tbody');
+          for (const [values, section, tag] of [[block.header, head, 'th'], ...block.rows.map(row => [row, body, 'td'])]) {
+            const row = element('tr'); for (const value of values) { const cell = element(tag); appendMarkdownInline(cell, value); row.append(cell); } section.append(row);
+          }
+          table.append(head, body); node.append(table);
+        } else if (block.type === 'code') { node = element('pre'); node.append(element('code', '', block.text)); }
+        else if (block.type === 'hr') node = element('hr');
+        else { node = element(block.type === 'heading' ? 'h' + block.level : block.type === 'blockquote' ? 'blockquote' : 'p'); appendMarkdownInline(node, block.type === 'truncated' ? currentLabels.truncated : block.text); }
+        root.append(node);
+      }
+      return root;
+    }
+
+    // References are normalized once; only relative and HTTP(S) destinations are usable.
+    function labelLanguage(lang) {
+      if (Object.prototype.hasOwnProperty.call(LABELS, lang)) return lang;
+      const browser = string(navigator.language).slice(0, 2).toLowerCase();
+      return Object.prototype.hasOwnProperty.call(LABELS, browser) ? browser : 'en';
+    }
+    function safeSource(value) {
+      const src = string(value).trim();
+      if (!src || /[\\\u0000-\u001f\u007f]/.test(src) || src.startsWith('//')) return '';
+      if (/^[a-z][a-z0-9+.-]*:/i.test(src) && !/^https?:/i.test(src)) return '';
+      try { const url = new URL(src, sessionUrl); return /^https?:/i.test(src) ? (/^https?:$/.test(url.protocol) ? src : '') : src; }
+      catch (_) { return ''; }
+    }
+    function normalizeRefs(value, user) {
+      return array(value).map(value => {
+        const ref = object(value);
+        return { id: string(ref.id), src: string(ref.src), target: string(ref.target), caption: string(ref.caption),
+          note: string(ref.note), name: string(ref.name), kind: string(ref.kind), user: user === true };
+      });
+    }
+    function fileName(src) { return string(src).split(/[?#]/)[0].split('/').pop() || string(src); }
+    function isPicture(ref) { return ref.kind === 'image' || /\.(png|jpe?g|gif|webp|svg)$/i.test(ref.src.split(/[?#]/)[0]); }
+    function refNodeId(ref) { return 'ref:' + (ref.user ? 'user:' : 'agent:') + ref.id; }
+
+    // Runtime state separates measured geometry, saved positions, and the viewport.
+    const warning = document.getElementById('warning');
+    const waiting = document.getElementById('waiting');
+    const board = document.getElementById('board');
+    const header = document.getElementById('header');
+    const canvas = document.getElementById('canvas');
+    const world = document.getElementById('world');
+    const grid = document.getElementById('grid');
+    const spec = document.getElementById('spec-content');
+    const specPanel = document.getElementById('spec-panel');
+    const specToggle = document.getElementById('spec-toggle');
+    const panelResize = document.getElementById('panel-resize');
+    const toolbar = document.getElementById('toolbar');
+    const toastNode = document.getElementById('toast');
+    const dropHint = document.getElementById('drop-hint');
+    const lightbox = document.getElementById('lightbox');
+    const reader = document.getElementById('reader');
+    const svgNamespace = 'http://www.w3.org/2000/svg';
+    const ideaId = '@idea';
+    const sessionParameter = new URLSearchParams(window.location.search).get('session');
+    let sessionUrl;
+    try {
+      const address = new URL(sessionParameter || 'session.js', window.location.href);
+      if (!['file:', 'http:', 'https:'].includes(address.protocol) || address.origin !== window.location.origin) throw new Error('Invalid session URL');
+      sessionUrl = address.href;
+    }
+    catch (_) { sessionUrl = new URL('session.js', window.location.href).href; }
+    const userUrl = new URL('user.js', sessionUrl).href;
+    const storageKey = 'grill-board:' + window.location.pathname + sessionUrl;
+    const panelWidthKey = 'grill-panel-width:' + window.location.pathname + sessionUrl;
+    let panelWidth = readPanelWidth();
+    const sketchNodes = new Map();
+    let enlargedSketch = null;
+    let previousSketchRevisions = new Map();
+    let previousReports = new Set();
+    const researchSteps = new Map();
+    let stepViews = new Map();
+    let stepsTimer = null;
+    const stepsFetching = new Set();
+    let readerState = null;
+    const sizesKey = 'grill-node-sizes:' + window.location.pathname + sessionUrl;
+    let nodeSizes = readNodeSizes();
+    let nodeResize = null;
+    let currentSession = null;
+    let currentUserRefs = [];
+    let currentLabels = sessionLabels({ lang: '', labels: {} });
+    let previousStatuses = new Map();
+    let previousResearchStatuses = new Map();
+    let lastInteraction = -Infinity;
+    let cardNodes = new Map();
+    let nodeRecords = new Map();
+    let graph = null;
+    let connectorLayer = null;
+    let socketLayer = null;
+    let selectedQuestion = '';
+    let hoveredQuestion = '';
+    let connection = null;
+    const expandedCards = new Set();
+    const openResearchPanels = new Set();
+    const pendingDropPositions = new Map();
+    let serverMode = false;
+    let specCollapsed = window.innerWidth < 900;
+    let manualOffsets = readOffsets();
+    saveOffsets();
+    let view = { x: 0, y: 0, z: 1 };
+    let copyResetTimer = null;
+    let toastTimer = null;
+    let lineFrame = null;
+    let glideFrame = null;
+    let focusBeforeLightbox = null;
+    const pendingHighlights = new Set();
+    waiting.textContent = currentLabels.waiting4file;
+    document.title = currentLabels.idea;
+    function readFlow() {
+      try { return localStorage.getItem(flowKey) === 'lr' ? 'lr' : 'td'; } catch (_) { return 'td'; }
+    }
+    function offsetsKey() { return storageKey + (flow === 'lr' ? ':lr' : ''); }
+    function readOffsets() {
+      try {
+        const saved = object(JSON.parse(localStorage.getItem(offsetsKey()) || '{}'));
+        const positions = Object.create(null);
+        for (const [id, pos] of Object.entries(saved)) if (pos && Number.isFinite(pos.dx) && Number.isFinite(pos.dy)) positions[id] = { dx: pos.dx, dy: pos.dy };
+        return positions;
+      } catch (_) { return Object.create(null); }
+    }
+    function saveOffsets() { try { localStorage.setItem(offsetsKey(), JSON.stringify(manualOffsets)); } catch (_) { /* Storage is optional on disk and in private browsing. */ } }
+    function reducedMotion() { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
+    function button(text, label, callback, className) {
+      const node = element('button', className || '', text);
+      node.type = 'button'; node.setAttribute('aria-label', label);
+      node.title = label;
+      if (callback) node.addEventListener('click', callback);
+      return node;
+    }
+    function toast(message) {
+      clearTimeout(toastTimer); toastNode.textContent = message; toastNode.hidden = false;
+      toastTimer = setTimeout(() => { toastNode.hidden = true; }, 2500);
+    }
+
+    // Questions lead each card; detail and research disclosure stay in memory.
+    function questionLabel(q, labels) {
+      const match = /^q([0-9]+)$/i.exec(q.id);
+      return match ? labels.qPrefix + match[1] : q.id.toUpperCase();
+    }
+    function validDependencies(q, questionsById) {
+      return [...new Set(q.dependsOn)].filter(id => id !== q.id && questionsById.has(id));
+    }
+    function questionCard(q, labels, questionsById, pictures, researchNotes) {
+      const card = element('article', 'question-card ' + q.status);
+      const tiled = q.options.some(option => pictures.has(q.id + ':' + option.id));
+      if (tiled) card.classList.add('picture-options');
+      card.classList.toggle('compact', q.status === 'settled' && !expandedCards.has(q.id));
+      card.tabIndex = 0; card.setAttribute('role', 'treeitem');
+      card.setAttribute('aria-selected', String(selectedQuestion === q.id));
+      card.dataset.questionId = q.id;
+      card.addEventListener('keydown', event => { if (event.key === 'Enter' && event.target === card) { event.preventDefault(); selectQuestion(q.id); } });
+      card.addEventListener('pointerenter', () => { hoveredQuestion = q.id; scheduleLines(); });
+      card.addEventListener('pointerleave', () => { if (hoveredQuestion === q.id) hoveredQuestion = ''; scheduleLines(); });
+      const heading = element('header', 'question-header');
+      const top = element('div', 'card-top');
+      const body = element('div', 'question-body');
+      const badges = element('div', 'badges'); badges.append(element('span', 'question-id', questionLabel(q, labels)));
+      if (q.status !== 'settled') badges.append(statusBadge(q.status, labels));
+      if (q.reopened) badges.append(element('span', 'badge reopened', labels.reopened));
+      top.append(badges);
+      heading.append(top, element('h3', 'question-title', q.title)); card.append(heading, body);
+      const details = element('div', 'question-details');
+      if (q.status === 'settled') {
+        const expanded = expandedCards.has(q.id);
+        details.hidden = !expanded;
+        const toggle = button(expanded ? '⌃' : '⌄', expanded ? labels.collapse : labels.expand, () => {
+          selectQuestion(q.id);
+          const show = !expandedCards.has(q.id);
+          if (show) expandedCards.add(q.id); else expandedCards.delete(q.id);
+          details.hidden = !show; toggle.textContent = show ? '⌃' : '⌄';
+          toggle.setAttribute('aria-label', show ? labels.collapse : labels.expand);
+          toggle.title = show ? labels.collapse : labels.expand; toggle.setAttribute('aria-expanded', String(show));
+          card.classList.toggle('compact', !show);
+          applyNodeSize(nodeRecords.get(q.id)); measureAndLayout();
+        }, 'details-toggle');
+        toggle.setAttribute('aria-expanded', String(expanded)); top.append(toggle);
+        const chosen = q.options.find(option => option.id === q.answer.option);
+        const summary = element('div', 'decision-summary');
+        const headline = element('h3', 'decision-title');
+        const check = element('span', 'check decision-check', '✓'); check.setAttribute('aria-hidden', 'true');
+        headline.append(check, element('span', '', q.decision || (chosen && chosen.label) || q.answer.text));
+        summary.append(headline); body.append(summary);
+      }
+      if (q.status !== 'waiting') {
+        if (q.body) details.append(element('p', 'body', q.body));
+        if (q.options.length) {
+          const options = element('ul', 'options' + (tiled ? ' tiles' : ''));
+          for (const option of q.options) {
+            const chosen = q.status === 'settled' && q.answer.option !== null && q.answer.option === option.id;
+            const row = element('li', 'option' + (chosen ? ' chosen' : q.status === 'settled' ? ' dimmed' : ''));
+            if (tiled) {
+              const ref = pictures.get(q.id + ':' + option.id);
+              const visual = ref ? picture(ref, 'tile-picture') : element('div', 'tile-picture empty-picture');
+              row.append(visual);
+              if (ref && ref.user) {
+                row.append(element('span', 'badge yours', labels.yours));
+                if (serverMode) addReferenceControls(row, ref);
+                else if (ref.note) row.append(element('p', 'ref-note', ref.note));
+              }
+            }
+            if (chosen) {
+              const check = element('span', 'check', '✓');
+              check.setAttribute('aria-hidden', 'true');
+              row.append(check);
+            }
+            row.append(element('span', 'option-label', option.label));
+            if (q.recommended !== null && option.id === q.recommended) row.append(element('span', 'recommended-tag', labels.recommended));
+            options.append(row);
+          }
+          details.append(options);
+        }
+        if (q.recommendation) details.append(element('p', 'note', labels.recommended + ': ' + q.recommendation));
+        if (q.answer.text) details.append(element('p', 'answer-text' + (q.answer.option === null ? ' chosen' : ''), labels.answer + ': ' + q.answer.text));
+        if (q.status === 'researching') details.append(element('p', 'note', labels.researchingHint));
+        body.append(details);
+      } else {
+        const dependencies = validDependencies(q, questionsById).map(id => questionsById.get(id)).filter(parent => parent.status !== 'settled');
+        body.append(element('p', 'note', labels.waitingOn + ': ' + dependencies.map(parent => questionLabel(parent, labels)).join(', ')));
+      }
+      const secondary = validDependencies(q, questionsById).slice(1);
+      if (secondary.length) body.append(element('div', 'dependency-chip', interpolate(labels.alsoDependsOn, {
+        ids: secondary.map(id => questionLabel(questionsById.get(id), labels)).join(', ')
+      })));
+      card.append(farLabel((q.status === 'settled' ? '✓ ' : '') + q.title));
+      appendResearchChips(body, q, researchNotes.filter(note => !(note.status === 'done' && safeSource(note.report))));
+      return card;
+    }
+    function appendResearchChips(card, q, notes) {
+      if (!notes.length) return;
+      const chips = element('div', 'research-chips'); const panels = element('div');
+      for (const note of notes) {
+        const panel = element('section', 'research-panel ' + note.status); panel.hidden = !openResearchPanels.has(note.id);
+        panel.append(researchBadge(note.status), element('h3', 'research-topic', note.topic));
+        if (note.status === 'running') bindSteps(panel, note.id, false);
+        appendResearchContent(panel, note);
+        const chip = button('', note.topic, () => {
+          selectQuestion(q.id);
+          const show = !openResearchPanels.has(note.id);
+          if (show) openResearchPanels.add(note.id); else openResearchPanels.delete(note.id);
+          panel.hidden = !show; chip.setAttribute('aria-expanded', String(show)); measureAndLayout();
+        }, 'research-chip');
+        chip.setAttribute('aria-expanded', String(!panel.hidden));
+        const dot = element('span', 'research-dot ' + note.status); dot.setAttribute('aria-hidden', 'true');
+        chip.append(dot, element('span', 'research-chip-label', note.topic));
+        if (previousResearchStatuses.get(note.id) !== note.status) chip.classList.add('highlight');
+        const group = element('div', 'research-chip-group ' + note.status); group.append(chip);
+        if (note.status === 'running') bindSteps(group, note.id, true);
+        chips.append(group); panels.append(panel);
+      }
+      card.append(chips, panels);
+    }
+
+    // Spec sections keep the original question array order.
+    function specSection(title, items, ordered, emptyLabel) {
+      const section = element('section', 'spec-section');
+      section.append(element('h3', '', title));
+      if (items.length) {
+        const list = element(ordered ? 'ol' : 'ul');
+        for (const item of items) list.append(item);
+        section.append(list);
+      } else section.append(element('p', 'empty', emptyLabel));
+      return section;
+    }
+    function renderSpec(data, labels) {
+      const decisions = data.questions.filter(q => q.status === 'settled').map(q => element('li', '', decisionText(q)));
+      const architecture = data.architecture.map(line => element('li', '', line));
+      const open = data.questions.filter(q => q.status !== 'settled').map(q => {
+        const item = element('li', '', questionLabel(q, labels) + ': ' + q.title);
+        item.append(statusBadge(q.status, labels));
+        return item;
+      });
+      const button = element('button', 'copy-button', labels.copySpec);
+      button.type = 'button';
+      button.addEventListener('click', async () => {
+        const copied = await copyMarkdown(buildSpecMarkdown(data, labels, currentUserRefs));
+        if (!copied || !button.isConnected) return;
+        clearTimeout(copyResetTimer);
+        button.textContent = labels.copied;
+        copyResetTimer = setTimeout(() => { button.textContent = labels.copySpec; }, 1500);
+      });
+      const researchSections = [];
+      const findings = data.research.filter(note => note.status === 'done');
+      const pending = data.research.filter(note => note.status !== 'done');
+      if (findings.length) {
+        const section = element('section', 'spec-section');
+        section.append(element('h3', '', labels.researchFindings));
+        for (const note of findings) {
+          const block = element('div', 'research-block');
+          block.append(element('strong', '', note.topic));
+          appendResearchContent(block, note);
+          if (safeSource(note.report)) block.append(reportButton(note));
+          section.append(block);
+        }
+        researchSections.push(section);
+      }
+      if (pending.length) researchSections.push(specSection(labels.toResearch, pending.map(note => {
+        const item = element('li', '', note.topic); item.append(researchBadge(note.status)); return item;
+      }), false, ''));
+      spec.replaceChildren(
+        element('h2', '', labels.spec), element('p', 'spec-hint', labels.specHint),
+        specSection(labels.decided, decisions, true, labels.emptyDecided),
+        specSection(labels.architecture, architecture, false, labels.emptyArchitecture), ...researchSections,
+        specSection(labels.open, open, false, labels.emptyOpen), button
+      );
+    }
+
+    // Clipboard API with a disk-compatible textarea fallback.
+    async function copyMarkdown(markdown) {
+      try {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(markdown);
+          return true;
+        }
+      } catch (_) { /* A rejected clipboard write falls through to the local fallback. */ }
+      const buffer = element('textarea', 'copy-buffer');
+      buffer.value = markdown;
+      buffer.setAttribute('readonly', '');
+      buffer.setAttribute('aria-hidden', 'true');
+      const focused = document.activeElement;
+      const scroll = { x: window.scrollX, y: window.scrollY, spec: spec.scrollTop };
+      document.body.append(buffer);
+      let copied = false;
+      try {
+        buffer.focus({ preventScroll: true });
+        buffer.select();
+        copied = document.execCommand('copy');
+      } catch (_) { /* Leave the button unchanged when both clipboard methods fail. */ }
+      finally {
+        buffer.remove();
+        if (focused && typeof focused.focus === 'function') focused.focus({ preventScroll: true });
+        spec.scrollTop = scroll.spec;
+        window.scrollTo(scroll.x, scroll.y);
+      }
+      return copied;
+    }
+
+    // Pure tidy-tree layout packs whole subtrees, aligning levels by cluster height.
+    function layoutGraph(nodes) {
+      const positions = Object.create(null), parents = Object.create(null), secondary = Object.create(null);
+      const questions = nodes.filter(node => node.kind === 'question');
+      const refs = nodes.filter(node => node.kind === 'reference');
+      const reports = nodes.filter(node => node.kind === 'report');
+      const idea = nodes.find(node => node.kind === 'idea') || { id: '@idea', width: LAYOUT.ideaWidth, height: 80 };
+      const byId = new Map(questions.map(node => [node.id, node]));
+      const clusters = [], items = new Map(), levels = [], edges = [];
+      function addCluster(node) {
+        const pinned = refs.filter(ref => node.id === idea.id ? ref.target === 'idea' || ref.target === idea.id : ref.target !== 'idea' && ref.target === node.id);
+        const stacked = reports.filter(report => node.kind === 'question' && report.target === node.id);
+        const stackHeight = node.height + stacked.reduce((sum, report) => sum + report.height + 8, 0);
+        const height = pinned.reduce((sum, ref, index) => sum + ref.height + (index ? 12 : 0), 0);
+        const item = { id: node.id, width: node.width + (pinned.length ? Math.max(...pinned.map(ref => ref.width)) + 24 : 0), height: Math.max(stackHeight, height),
+          cardWidth: node.width, cardHeight: node.height, refs: pinned, reports: stacked, children: [], depth: 0, x: 0, y: 0 };
+        if (flow === 'lr') {
+          item.width = Math.max(node.width, ...stacked.map(report => report.width), ...pinned.map(ref => ref.width));
+          item.height = stackHeight + (pinned.length ? 24 + height : 0);
+        }
+        clusters.push(item); items.set(node.id, item);
+      }
+      addCluster(idea); parents[idea.id] = null;
+      for (const node of questions) {
+        addCluster(node);
+        const valid = [...new Set(node.dependsOn || [])].filter(id => id !== node.id && byId.has(id));
+        parents[node.id] = valid[0] || idea.id; secondary[node.id] = valid.slice(1);
+      }
+      // Malformed cyclic input is rooted deterministically so the board remains usable.
+      for (const node of questions) {
+        const visited = new Set(); let id = node.id;
+        while (id !== idea.id) {
+          if (visited.has(id)) { parents[id] = idea.id; break; }
+          visited.add(id); id = parents[id];
+        }
+      }
+      for (const node of questions) {
+        items.get(parents[node.id]).children.push(node.id);
+        edges.push({ from: parents[node.id], to: node.id });
+      }
+      // Packing runs along the sibling axis; levels advance along the other axis.
+      let siblingGap = LAYOUT.gapX, levelGap = LAYOUT.gapY;
+      for (const item of clusters) { item.span = item.width; item.cardSpan = item.cardWidth; item.levelSize = item.height; }
+      if (flow === 'lr') {
+        siblingGap = LAYOUT.lrGapY; levelGap = LAYOUT.lrGapX;
+        for (const item of clusters) { item.span = item.height; item.cardSpan = item.cardHeight; item.levelSize = item.width; }
+      }
+      function pack(id, depth) {
+        const item = items.get(id); item.depth = depth;
+        if (!levels[depth]) levels[depth] = []; levels[depth].push(item);
+        const children = item.children.map(child => pack(child, depth + 1));
+        const placed = new Map(); let width = 0; const centers = [];
+        for (const child of children) {
+          centers.push(width + child.center);
+          for (const [childId, x] of child.placed) placed.set(childId, width + x);
+          width += child.width + siblingGap;
+        }
+        if (children.length) width -= siblingGap;
+        const x = children.length ? (centers[0] + centers[centers.length - 1]) / 2 - item.cardSpan / 2 : 0;
+        const left = Math.min(0, x), right = Math.max(width, x + item.span);
+        placed.set(id, x);
+        for (const [childId, position] of placed) placed.set(childId, position - left);
+        return { placed, width: right - left, center: x - left + item.cardSpan / 2 };
+      }
+      const tree = pack(idea.id, 0);
+      let y = 0;
+      for (const level of levels) {
+        if (flow === 'lr') {
+          for (const item of level) { item.x = y; item.y = tree.placed.get(item.id) - tree.center; }
+        } else {
+          for (const item of level) { item.x = tree.placed.get(item.id) - tree.center; item.y = y; }
+        }
+        y += Math.max(...level.map(item => item.levelSize)) + levelGap;
+      }
+      for (const item of clusters) {
+        positions[item.id] = { x: item.x, y: item.y };
+        let refX = item.x + item.cardWidth + 24, refY = item.y;
+        if (flow === 'lr') {
+          refX = item.x;
+          refY += item.cardHeight + item.reports.reduce((sum, report) => sum + report.height + 8, 0) + 24;
+        }
+        for (const ref of item.refs) {
+          positions[ref.id] = { x: refX, y: refY };
+          parents[ref.id] = item.id; refY += ref.height + 12;
+        }
+      }
+      for (const item of clusters) {
+        let reportY = item.y + item.cardHeight + 8;
+        for (const report of item.reports) {
+          positions[report.id] = { x: item.x, y: reportY };
+          parents[report.id] = item.id; reportY += report.height + 8;
+        }
+      }
+      const sketches = nodes.filter(node => node.kind === 'sketch');
+      const root = items.get(idea.id);
+      if (flow === 'lr') {
+        const columnHeight = sketches.reduce((sum, sketch) => sum + sketch.height, 0) + Math.max(0, sketches.length - 1) * 24;
+        let sketchY = root.y + root.cardHeight / 2 - columnHeight / 2;
+        for (const sketch of sketches) {
+          positions[sketch.id] = { x: root.x - 56 - sketch.width, y: sketchY }; parents[sketch.id] = idea.id;
+          sketchY += sketch.height + 24;
+        }
+      } else {
+        const rowWidth = sketches.reduce((sum, sketch) => sum + sketch.width, 0) + Math.max(0, sketches.length - 1) * 24;
+        let sketchX = root.x + root.cardWidth / 2 - rowWidth / 2;
+        for (const sketch of sketches) {
+          positions[sketch.id] = { x: sketchX, y: root.y - 56 - sketch.height }; parents[sketch.id] = idea.id;
+          sketchX += sketch.width + 24;
+        }
+      }
+      const boardRefs = refs.filter(ref => !positions[ref.id]);
+      const boardResearch = nodes.filter(node => node.kind === 'research' && !byId.has((node.target || '').split(':')[0]));
+      const boardReports = reports.filter(report => !positions[report.id]);
+      const boardColumn = boardRefs.concat(boardResearch, boardReports);
+      const boardRefX = Math.min(...clusters.map(item => item.x), ...sketches.map(sketch => positions[sketch.id].x)) - 80 - Math.max(200, ...boardColumn.map(node => node.width));
+      let refY = 0;
+      for (const ref of boardRefs) { positions[ref.id] = { x: boardRefX, y: refY }; parents[ref.id] = null; refY += ref.height + 12; }
+      const researchCaptionY = boardRefs.length ? refY + 12 : -28;
+      if (boardRefs.length && boardResearch.length) refY = researchCaptionY + 28;
+      const placedReports = new Set();
+      function placeBoardItem(node) {
+        positions[node.id] = { x: boardRefX, y: refY }; parents[node.id] = null; refY += node.height + 12;
+      }
+      for (const note of boardResearch) {
+        placeBoardItem(note);
+        for (const report of boardReports.filter(report => (report.noteId && report.noteId === note.noteId) || report.id === 'report:' + note.id.replace(/^research:/, ''))) {
+          placeBoardItem(report); placedReports.add(report.id);
+        }
+      }
+      for (const report of boardReports) if (!placedReports.has(report.id)) placeBoardItem(report);
+      return { positions, parents, secondary, clusters, levels, edges, boardRefs, boardResearch, boardRefX, researchCaptionY, boardReports, sketches: sketches.map(node => node.id) };
+    }
+
+    // Research cards and spec blocks use the same findings and safe source links.
+    function researchBadge(status) {
+      const keys = { todo: 'researchTodo', running: 'researchRunning', done: 'researchDone' };
+      return element('span', 'badge research-' + status, currentLabels[keys[status]]);
+    }
+    function appendResearchContent(node, note) {
+      if (note.finding) node.append(element('p', 'research-finding', note.finding));
+      if (note.sources.length) {
+        const list = element('ul', 'research-sources');
+        for (const source of note.sources) {
+          const item = element('li'); const link = element('a', '', sourceTitle(source));
+          link.href = source.url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.draggable = false;
+          item.append(link); list.append(item);
+        }
+        node.append(list);
+      }
+    }
+    function researchCard(note) {
+      const card = element('article', 'research-card ' + note.status); card.tabIndex = 0;
+      const top = element('div', 'research-top');
+      top.append(researchBadge(note.status), element('span', 'caption', currentLabels.research));
+      card.append(top, element('h3', 'research-topic', note.topic));
+      if (note.status === 'running') bindSteps(card, note.id, false);
+      appendResearchContent(card, note);
+      return card;
+    }
+
+    // Reference cards, note editing, and a keyboard-accessible picture overlay.
+    function picture(ref, className) {
+      const node = button('', currentLabels.openLink, () => openLightbox(ref), className);
+      const img = element('img');
+      img.src = new URL(ref.src, sessionUrl).href;
+      img.alt = ref.caption || ref.note || ref.name || fileName(ref.src);
+      img.draggable = false;
+      node.append(img);
+      node.dataset.picture = 'true';
+      node.pictureReference = ref;
+      if (ref.user) node.dataset.inlineRef = refNodeId(ref);
+      return node;
+    }
+    function referenceCard(ref) {
+      const card = element('article', 'reference-card');
+      card.tabIndex = 0;
+      card.dataset.refId = ref.id;
+      if (isPicture(ref)) card.append(picture(ref, 'reference-picture'));
+      else {
+        const url = new URL(ref.src, sessionUrl);
+        card.append(element('strong', '', url.hostname || fileName(ref.src)), element('span', 'ref-url', ref.src));
+        const open = element('a', 'ref-open', currentLabels.openLink);
+        open.href = url.href; open.target = '_blank'; open.rel = 'noopener noreferrer';
+        open.draggable = false; open.setAttribute('aria-label', currentLabels.openLink);
+        card.append(open);
+      }
+      if (ref.user) card.append(element('span', 'badge yours', currentLabels.yours));
+      if (ref.user && serverMode) {
+        addReferenceControls(card, ref);
+        card.append(button('', currentLabels.connect, null, 'connector-handle'));
+      }
+      else if (ref.caption || ref.note) card.append(element('p', 'ref-note', ref.user ? ref.note : ref.caption));
+      return card;
+    }
+    function addReferenceControls(card, ref) {
+      const remove = button('×', currentLabels.deleteRef, async () => {
+        try {
+          await apiRequest('api/refs/' + encodeURIComponent(ref.id), 'DELETE');
+          delete manualOffsets[refNodeId(ref)]; saveOffsets(); await loadFiles();
+        } catch (error) { toast(currentLabels.refFailed + ': ' + error.message); }
+      }, 'delete-ref');
+      const note = button(ref.note || currentLabels.addNote, currentLabels.addNote, () => editNote(note, ref), 'ref-note' + (ref.note ? '' : ' placeholder'));
+      card.append(remove, note);
+      if (ref.target === 'idea' || (currentSession && currentSession.questions.some(q => q.id === ref.target.split(':')[0]))) {
+        card.append(button('−', currentLabels.disconnect, async () => {
+          try { await updateReferenceTarget(ref, ''); }
+          catch (error) { toast(currentLabels.refFailed + ': ' + error.message); }
+        }, 'disconnect-ref'));
+      }
+    }
+    async function updateReferenceTarget(ref, target) {
+      await apiRequest('api/refs/' + encodeURIComponent(ref.id), 'POST', { target });
+      delete manualOffsets[refNodeId(ref)]; saveOffsets(); applyOffsets(); scheduleLines();
+      await loadFiles();
+    }
+    function editNote(note, ref) {
+      const editor = element('textarea', 'note-editor');
+      editor.value = ref.note; editor.maxLength = 2000; editor.setAttribute('aria-label', currentLabels.addNote);
+      note.replaceWith(editor); measureAndLayout(); editor.focus({ preventScroll: true });
+      let finished = false;
+      async function finish(save) {
+        if (finished) return;
+        finished = true;
+        const value = editor.value;
+        editor.replaceWith(note); measureAndLayout();
+        if (!save || value === ref.note) { renderLatest(); return; }
+        try {
+          await apiRequest('api/refs/' + encodeURIComponent(ref.id), 'POST', { note: value });
+          await loadFiles();
+        } catch (error) { toast(currentLabels.refFailed + ': ' + error.message); }
+      }
+      editor.addEventListener('keydown', event => {
+        if (event.key === 'Escape') { event.preventDefault(); finish(false); note.focus({ preventScroll: true }); }
+        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); finish(true); }
+      });
+      editor.addEventListener('blur', () => finish(true));
+    }
+    function openLightbox(ref) {
+      enlargedSketch = null; lightbox.classList.remove('sketch-overlay');
+      focusBeforeLightbox = document.activeElement;
+      const image = element('img'); image.src = new URL(ref.src, sessionUrl).href;
+      image.alt = ref.caption || ref.note || ref.name || fileName(ref.src);
+      const close = button('×', currentLabels.close, closeLightbox);
+      lightbox.setAttribute('aria-label', image.alt || currentLabels.references);
+      lightbox.replaceChildren(close, image, element('p', '', ref.caption || ref.note || ref.name));
+      lightbox.hidden = false; close.focus({ preventScroll: true });
+    }
+    function closeLightbox() {
+      enlargedSketch = null; lightbox.classList.remove('sketch-overlay');
+      lightbox.hidden = true; lightbox.replaceChildren();
+      if (focusBeforeLightbox && focusBeforeLightbox.isConnected) focusBeforeLightbox.focus({ preventScroll: true });
+    }
+    reader.addEventListener('click', event => { if (event.target === reader) closeReader(); });
+    window.addEventListener('keydown', event => { if (event.key === 'Escape' && !reader.hidden) { event.preventDefault(); closeReader(); } });
+    lightbox.addEventListener('click', event => { if (!enlargedSketch || event.target === lightbox) closeLightbox(); });
+    lightbox.addEventListener('keydown', event => { if (event.key === 'Tab' && !enlargedSketch) { event.preventDefault(); lightbox.querySelector('button').focus(); } });
+    window.addEventListener('keydown', event => { if (event.key === 'Escape' && !lightbox.hidden) closeLightbox(); });
+
+    // Nodes and the enlarged overlay share safe, revision-aware sketch frames.
+    function usableSketches() { return currentSession ? currentSession.sketches.filter(sketch => safeSource(sketch.src)) : []; }
+    function sketchUrl(sketch) {
+      const url = new URL(safeSource(sketch.src), sessionUrl);
+      url.searchParams.set('rev', String(sketch.rev));
+      return url.href;
+    }
+    function createSketchFrame(sketch) {
+      const url = sketchUrl(sketch);
+      const html = /\.html?$/i.test(new URL(url).pathname);
+      const surface = element(html ? 'iframe' : 'img', 'sketch-surface');
+      if (html) {
+        surface.setAttribute('sandbox', '');
+        surface.setAttribute('referrerpolicy', 'no-referrer');
+        surface.setAttribute('loading', 'eager');
+      }
+      // Embedded browsers can block a framed page; over http the sketch is read as text and handed to the frame instead.
+      if (html && /^https?:$/.test(location.protocol) && new URL(url).origin === location.origin) {
+        fetch(url, { cache: 'no-store' })
+          .then(response => response.ok ? response.text() : Promise.reject(new Error(String(response.status))))
+          .then(text => {
+            const base = '<base href="' + url.replace(/&/g, '&amp;') + '">';
+            surface.srcdoc = /<head[^>]*>/i.test(text) ? text.replace(/<head[^>]*>/i, match => match + base) : base + text;
+          })
+          .catch(() => { surface.src = url; });
+      } else {
+        surface.src = url;
+      }
+      const frame = element('div', 'sketch-frame'); frame.append(surface);
+      return { frame, surface, key: new URL(sketch.src, sessionUrl).href + '\n' + sketch.rev };
+    }
+    function sizeSketchFrame(frame, surface, sketch, scale) {
+      frame.style.width = sketch.width * scale + 'px'; frame.style.height = sketch.height * scale + 'px';
+      surface.style.width = sketch.width + 'px'; surface.style.height = sketch.height + 'px';
+      surface.style.transform = 'scale(' + scale + ')';
+      surface.title = sketch.title;
+      if (surface.tagName === 'IMG') surface.alt = sketch.title;
+    }
+    // Canvas sketch metadata updates leave unchanged embedded frames mounted.
+    function updateSketchNode(sketch, changed) {
+      let entry = sketchNodes.get(sketch.id);
+      if (!entry) {
+        const node = element('article', 'sketch-card'); node.tabIndex = 0;
+        node.setAttribute('role', 'treeitem'); node.setAttribute('aria-level', '2');
+        node.dataset.sketchId = sketch.id;
+        const row = element('div', 'sketch-card-header');
+        const caption = element('span', 'caption'); const title = element('strong');
+        const farTitle = farLabel(sketch.title); const viewport = element('span', 'sketch-viewport');
+        row.append(caption, title, viewport, farTitle);
+        const note = element('p', 'sketch-card-note');
+        const stage = element('div'); node.append(row, stage, note);
+        node.addEventListener('keydown', event => {
+          if (event.key === 'Enter' && event.target === node) { event.preventDefault(); openEnlargedSketch(sketch.id); }
+        });
+        entry = { node, caption, title, farTitle, viewport, stage, note, embedded: null }; sketchNodes.set(sketch.id, entry);
+      }
+      const key = new URL(sketch.src, sessionUrl).href + '\n' + sketch.rev;
+      if (!entry.embedded || entry.embedded.key !== key) {
+        entry.embedded = createSketchFrame(sketch); entry.stage.replaceChildren(entry.embedded.frame);
+      }
+      entry.caption.textContent = currentLabels.sketch; entry.title.textContent = sketch.title;
+      entry.title.title = sketch.title; entry.farTitle.textContent = sketch.title;
+      entry.note.textContent = sketch.note; entry.note.hidden = !sketch.note;
+      if (changed) {
+        entry.node.classList.remove('highlight'); void entry.node.offsetWidth; entry.node.classList.add('highlight');
+      }
+      registerNode('sketch:' + sketch.id, entry.node, { kind: 'sketch', sketch });
+    }
+
+    // A saved panel width is independent of the tree's stored offsets.
+    function readPanelWidth() {
+      try { const value = Number(localStorage.getItem(panelWidthKey)); return Number.isFinite(value) && value >= 320 ? value : null; }
+      catch (_) { return null; }
+    }
+    function boundedPanelWidth(value) { return Math.max(320, Math.min(window.innerWidth * .7, value)); }
+    function applyPanelWidth() {
+      specPanel.style.width = window.innerWidth < 900 || specCollapsed ? '' : boundedPanelWidth(panelWidth === null ? 360 : panelWidth) + 'px';
+    }
+    let panelDrag = null;
+    panelResize.addEventListener('pointerdown', event => {
+      if (event.button !== 0 || window.innerWidth < 900 || specCollapsed) return;
+      event.preventDefault();
+      panelDrag = { id: event.pointerId, x: event.clientX, width: specPanel.getBoundingClientRect().width };
+      panelResize.setPointerCapture(event.pointerId);
+    });
+    panelResize.addEventListener('pointermove', event => {
+      if (!panelDrag || panelDrag.id !== event.pointerId) return;
+      panelWidth = boundedPanelWidth(panelDrag.width + panelDrag.x - event.clientX);
+      applyPanelWidth();
+    });
+    function finishPanelResize(event) {
+      if (!panelDrag || panelDrag.id !== event.pointerId) return;
+      panelDrag = null;
+      if (panelResize.hasPointerCapture(event.pointerId)) panelResize.releasePointerCapture(event.pointerId);
+      try { if (panelWidth !== null) localStorage.setItem(panelWidthKey, String(panelWidth)); } catch (_) {}
+    }
+    panelResize.addEventListener('pointerup', finishPanelResize);
+    panelResize.addEventListener('pointercancel', finishPanelResize);
+
+    // Enlarged sketches share the lightbox's backdrop, close button, and Escape handling.
+    function openEnlargedSketch(id) {
+      const sketch = usableSketches().find(sketch => sketch.id === id); if (!sketch) return;
+      focusBeforeLightbox = document.activeElement;
+      const embedded = createSketchFrame(sketch);
+      const title = element('h2', '', sketch.title);
+      const heading = element('div', 'sketch-overlay-heading');
+      const link = element('a', '', currentLabels.openSketch); link.href = sketchUrl(sketch);
+      link.target = '_blank'; link.rel = 'noopener noreferrer'; heading.append(title, link);
+      enlargedSketch = { ...embedded, sketch, heading };
+      lightbox.classList.add('sketch-overlay');
+      lightbox.setAttribute('aria-label', sketch.title || currentLabels.sketch);
+      const close = button('×', currentLabels.close, closeLightbox);
+      lightbox.replaceChildren(close, heading, embedded.frame); lightbox.hidden = false;
+      scaleEnlargedSketch(); close.focus({ preventScroll: true });
+    }
+    function scaleEnlargedSketch() {
+      if (!enlargedSketch) return;
+      const { frame, surface, sketch, heading } = enlargedSketch;
+      const record = nodeRecords.get('sketch:' + sketch.id);
+      const viewport = record ? sketchSize(record) : sketch;
+      const scale = Math.min(1, window.innerWidth * .92 / viewport.width, Math.max(1, window.innerHeight * .92 - heading.offsetHeight - 12) / viewport.height);
+      sizeSketchFrame(frame, surface, { ...sketch, width: viewport.width, height: viewport.height }, scale);
+    }
+
+    // Good reads replace card contents, measure them, and keep the current view.
+    function render(session, userRefs) {
+      const firstRender = currentSession === null;
+      const scrollTop = spec.scrollTop;
+      const focused = document.activeElement;
+      const focusId = focused && focused.closest('.node') && focused.closest('.node').dataset.nodeId;
+      currentSession = normalizeSession(session);
+      currentUserRefs = normalizeRefs(userRefs, true);
+      currentLabels = sessionLabels(currentSession);
+      const data = currentSession;
+      const labels = currentLabels;
+      stepViews = new Map();
+      for (const id of researchSteps.keys()) if (!data.research.some(note => note.id === id && note.status === 'running')) researchSteps.delete(id);
+      if (readerState && !data.research.some(note => note.id === readerState.id)) closeReader();
+      document.documentElement.lang = labelLanguage(data.lang);
+      document.title = data.title || labels.idea;
+      waiting.hidden = true; board.hidden = false;
+      clearTimeout(copyResetTimer);
+      if (!data.questions.some(q => q.id === selectedQuestion)) selectedQuestion = '';
+      const titleLine = element('div', 'title-line'); titleLine.append(element('h1', '', data.title));
+      if (data.status === 'done') titleLine.append(element('span', 'badge done', labels.done));
+      const progress = element('div', 'progress');
+      progress.append(element('span', '', interpolate(labels.progress, { done: data.questions.filter(q => q.status === 'settled').length, total: data.questions.length })));
+      const dot = element('span', 'live-dot changed'); dot.setAttribute('role', 'img'); dot.setAttribute('aria-label', labels.live); progress.append(dot);
+      header.replaceChildren(titleLine, element('p', 'idea-text', data.idea), progress);
+      renderSpec(data, labels); spec.scrollTop = scrollTop;
+      const changedSketches = new Set(usableSketches().filter(sketch => !firstRender &&
+        (!previousSketchRevisions.has(sketch.id) || sketch.rev > previousSketchRevisions.get(sketch.id))).map(sketch => sketch.id));
+      const newSketches = usableSketches().filter(sketch => !firstRender && !previousSketchRevisions.has(sketch.id)).map(sketch => 'sketch:' + sketch.id);
+      previousSketchRevisions = new Map(usableSketches().map(sketch => [sketch.id, sketch.rev]));
+      renderToolbar(); updateSpec();
+      world.setAttribute('role', 'tree'); world.setAttribute('aria-label', data.title || labels.idea);
+      hoveredQuestion = '';
+      cardNodes = new Map(); nodeRecords = new Map();
+      connectorLayer = document.createElementNS(svgNamespace, 'svg');
+      connectorLayer.classList.add('connectors'); connectorLayer.setAttribute('aria-hidden', 'true');
+      socketLayer = document.createElementNS(svgNamespace, 'svg');
+      socketLayer.classList.add('sockets'); socketLayer.setAttribute('aria-hidden', 'true');
+      const liveSketches = new Set(usableSketches().map(sketch => sketch.id));
+      for (const [id, entry] of sketchNodes) {
+        if (!liveSketches.has(id)) { entry.node.remove(); sketchNodes.delete(id); }
+      }
+      const keptNodes = new Set([...sketchNodes.values()].map(entry => entry.node));
+      for (const child of Array.from(world.children)) if (!keptNodes.has(child)) child.remove();
+      world.prepend(connectorLayer); world.append(socketLayer);
+      const references = data.refs.concat(currentUserRefs).filter(ref => safeSource(ref.src)).map(ref => ({ ...ref, src: safeSource(ref.src) }));
+      const questionsById = new Map(data.questions.map(q => [q.id, q]));
+      const pictures = new Map();
+      const remaining = [];
+      for (const ref of references) {
+        const q = questionsById.get(ref.target.split(':')[0]);
+        const optionTarget = q && q.options.some(option => ref.target === q.id + ':' + option.id);
+        if (optionTarget && q.status !== 'waiting' && isPicture(ref) && !pictures.has(ref.target)) pictures.set(ref.target, ref);
+        else remaining.push({ ...ref, target: optionTarget ? q.id : ref.target });
+      }
+      const idea = element('div', 'idea-card');
+      idea.append(element('span', 'caption', labels.idea), element('strong', '', data.title));
+      idea.append(element('p', 'idea-summary', data.idea));
+      idea.append(farLabel(data.title));
+      idea.setAttribute('role', 'treeitem'); idea.setAttribute('aria-level', '1');
+      registerNode(ideaId, idea, { kind: 'idea' });
+      const newAsking = [];
+      const nextStatuses = new Map();
+      for (const q of data.questions) {
+        if (cardNodes.has(q.id)) continue;
+        if (q.status === 'settled' && previousStatuses.get(q.id) !== 'settled') expandedCards.delete(q.id);
+        const card = questionCard(q, labels, questionsById, pictures, data.research.filter(note => note.target === q.id));
+        const changed = previousStatuses.get(q.id) !== q.status;
+        if (!firstRender && changed) card.classList.add('highlight');
+        if (!firstRender && changed && q.status === 'asking') newAsking.push(q.id);
+        registerNode(q.id, card, { kind: 'question', dependsOn: q.dependsOn });
+        cardNodes.set(q.id, card); nextStatuses.set(q.id, q.status);
+      }
+      previousStatuses = nextStatuses;
+      for (const ref of remaining) {
+        const id = refNodeId(ref);
+        const card = referenceCard(ref);
+        if (pendingHighlights.has(refNodeId(ref))) { card.classList.add('highlight'); pendingHighlights.delete(refNodeId(ref)); }
+        registerNode(id, card, { kind: 'reference', target: ref.target, ref });
+      }
+      for (const ref of pictures.values()) {
+        if (pendingHighlights.has(refNodeId(ref))) {
+          const target = cardNodes.get(ref.target.split(':')[0]);
+          if (target) target.classList.add('highlight');
+          pendingHighlights.delete(refNodeId(ref));
+        }
+      }
+      const nextResearchStatuses = new Map();
+      for (const note of data.research) {
+        nextResearchStatuses.set(note.id, note.status);
+        if (questionsById.has(note.target)) continue;
+        const card = researchCard(note);
+        if (previousResearchStatuses.get(note.id) !== note.status) card.classList.add('highlight');
+        registerNode(researchNodeId(note), card, { kind: 'research', target: note.target });
+      }
+      previousResearchStatuses = nextResearchStatuses;
+      const reports = data.research.filter(note => note.status === 'done' && safeSource(note.report));
+      const newReports = reports.filter(note => !firstRender && !previousReports.has(note.id));
+      for (const note of reports) {
+        const card = reportCard(note, questionsById.has(note.target));
+        if (newReports.some(added => added.id === note.id)) card.classList.add('highlight');
+        registerNode('report:' + note.id, card, { kind: 'report', target: questionsById.has(note.target) ? note.target : '', noteId: note.id, note });
+      }
+      previousReports = new Set(reports.map(note => note.id));
+      for (const sketch of usableSketches()) updateSketchNode(sketch, changedSketches.has(sketch.id));
+      saveNodeSizes(); measureAndLayout(); selectQuestion(selectedQuestion);
+      if (focusId && nodeRecords.has(focusId)) nodeRecords.get(focusId).element.focus({ preventScroll: true });
+      syncResearchSteps();
+      if (firstRender) focusView(false);
+      else if (Date.now() - lastInteraction >= 10000) {
+        // A sketch that just entered the board is shown with the idea it hangs from; otherwise the view follows the new questions.
+        if (newSketches.length) focusView(true, [ideaId].concat(newSketches));
+        else if (newReports.length) focusView(true, [questionsById.has(newReports[0].target) ? newReports[0].target : ideaId, 'report:' + newReports[0].id]);
+        else if (newAsking.length) focusView(true);
+      }
+    }
+    function registerNode(id, node, metadata) {
+      node.classList.add('node'); node.dataset.nodeId = id;
+      if (node.parentNode !== world) world.append(node);
+      const record = { id, element: node, ...metadata };
+      nodeRecords.set(id, record);
+      addResizeHandle(record); applyNodeSize(record);
+    }
+    // Saved widths affect content geometry; live resizing keeps every other node still.
+    function readNodeSizes() {
+      const sizes = Object.create(null);
+      try {
+        const saved = object(JSON.parse(localStorage.getItem(sizesKey) || '{}'));
+        for (const [id, size] of Object.entries(saved)) {
+          if (typeof size === 'number' && Number.isFinite(size)) sizes[id] = size;
+          else if (id.startsWith('sketch:') && size && ['width', 'height', 'scale'].every(key => typeof size[key] === 'number' && Number.isFinite(size[key]) && size[key] > 0)) {
+            sizes[id] = { width: size.width, height: size.height, scale: size.scale };
+          }
+        }
+      } catch (_) {}
+      return sizes;
+    }
+    function saveNodeSizes() {
+      for (const id of Object.keys(nodeSizes)) if (!nodeRecords.has(id)) delete nodeSizes[id];
+      try { localStorage.setItem(sizesKey, JSON.stringify(nodeSizes)); } catch (_) {}
+    }
+    function defaultNodeWidth(record) {
+      if (record.kind === 'sketch') return record.sketch.height > record.sketch.width ? LAYOUT.sketchWidth.portrait : LAYOUT.sketchWidth.landscape;
+      if (record.kind === 'idea') return LAYOUT.ideaWidth;
+      if (record.kind === 'reference') return 200;
+      if (record.kind === 'report' && record.target && nodeRecords.has(record.target)) return nodeRecords.get(record.target).element.offsetWidth;
+      if (record.kind === 'research' || record.kind === 'report') return 240;
+      return record.element.classList.contains('picture-options') ? 460 : LAYOUT.questionWidth;
+    }
+    function boundedNodeWidth(record, width) {
+      const picture = record.kind === 'reference' && isPicture(record.ref);
+      const min = record.kind === 'sketch' ? 160 : picture ? 120 : 200;
+      const max = record.kind === 'sketch' ? 1200 : picture ? 900 : 720;
+      return Math.max(min, Math.min(max, width));
+    }
+    // Legacy sketch widths mean a scale at the session's original viewport.
+    function sketchSize(record) {
+      const sketch = record.sketch, saved = nodeSizes[record.id];
+      const defaultScale = Math.min(1, defaultNodeWidth(record) / sketch.width);
+      const size = saved && typeof saved === 'object' ? { ...saved } : {
+        width: sketch.width, height: sketch.height, scale: typeof saved === 'number' ? saved / sketch.width : defaultScale
+      };
+      const html = sketchNodes.get(sketch.id).embedded.surface.tagName === 'IFRAME';
+      if (!html) { size.width = sketch.width; size.height = sketch.height; }
+      if (size.width !== sketch.width) size.width = Math.max(240, Math.min(2400, size.width));
+      if (size.height !== sketch.height) size.height = Math.max(200, Math.min(3000, size.height));
+      size.scale = boundedNodeWidth(record, size.width * size.scale) / size.width;
+      return size;
+    }
+    function applyNodeSize(record) {
+      const saved = Object.prototype.hasOwnProperty.call(nodeSizes, record.id);
+      if (record.kind === 'sketch') {
+        const entry = sketchNodes.get(record.sketch.id), size = sketchSize(record);
+        if (saved) nodeSizes[record.id] = size;
+        record.element.style.width = size.width * size.scale + 22 + 'px';
+        sizeSketchFrame(entry.embedded.frame, entry.embedded.surface, { ...record.sketch, width: size.width, height: size.height }, size.scale);
+        entry.viewport.textContent = interpolate(currentLabels.viewportSize, { width: Math.round(size.width), height: Math.round(size.height) });
+        entry.viewport.hidden = !(nodeResize && nodeResize.record.id === record.id) && size.width === record.sketch.width && size.height === record.sketch.height;
+      } else {
+        const width = saved ? boundedNodeWidth(record, nodeSizes[record.id]) : defaultNodeWidth(record);
+        if (saved) nodeSizes[record.id] = width;
+        record.element.style.width = width + 'px';
+        if (record.kind === 'reference' && isPicture(record.ref)) {
+          const image = record.element.querySelector('.reference-picture img');
+          if (image) image.style.height = 160 * (width - 18) / 182 + 'px';
+        }
+      }
+    }
+    function resizeNodeLive(state, dx, dy) {
+      const record = state.record, west = state.edge.includes('w'), north = state.edge.includes('n');
+      const horizontal = state.edge.includes('w') || state.edge.includes('e');
+      const vertical = state.edge.includes('n') || state.edge.includes('s');
+      const x = west ? -dx : dx, y = north ? -dy : dy;
+      if (record.kind === 'sketch') {
+        const size = { ...state.size }, html = sketchNodes.get(record.sketch.id).embedded.surface.tagName === 'IFRAME';
+        // An edge or a corner changes the sketch's viewport; a corner dragged with Shift scales the preview.
+        if (html && !state.scaling) {
+          if (horizontal) {
+            const min = Math.max(240, 160 / size.scale), max = Math.min(2400, 1200 / size.scale);
+            size.width = Math.max(min, Math.min(max, Math.round(size.width + x / size.scale)));
+          }
+          if (vertical) size.height = Math.max(200, Math.min(3000, Math.round(size.height + y / size.scale)));
+        } else {
+          const width = size.width * size.scale, height = size.height * size.scale;
+          const change = horizontal && vertical ? (x * width + y * height) / (width * width + height * height)
+            : horizontal ? x / width : y / height;
+          size.scale = boundedNodeWidth(record, width * (1 + change)) / size.width;
+        }
+        nodeSizes[record.id] = size;
+      } else {
+        let change = x;
+        if (record.kind === 'reference' && isPicture(record.ref)) {
+          const width = state.width - 18, height = 160 * width / 182;
+          change = horizontal && vertical ? width * (x * width + y * height) / (width * width + height * height)
+            : horizontal ? x : y * width / height;
+        }
+        nodeSizes[record.id] = boundedNodeWidth(record, state.width + change);
+      }
+      applyNodeSize(record);
+      record.width = record.element.offsetWidth; record.height = record.element.offsetHeight;
+      record.x = west ? state.right - record.width : state.left;
+      record.y = north ? state.bottom - record.height : state.top;
+      placeNode(record);
+      if (record.kind === 'question') {
+        const cluster = graph.clusters.find(item => item.id === record.id);
+        let y = record.y + record.height + 8;
+        for (const report of cluster.reports) {
+          const child = nodeRecords.get(report.id), offset = manualOffsets[report.id] || { dx: 0, dy: 0 };
+          applyNodeSize(child); child.width = child.element.offsetWidth; child.height = child.element.offsetHeight;
+          child.x = record.x + offset.dx; child.y = y + offset.dy; placeNode(child); y += child.height + 8;
+        }
+        if (flow === 'lr') {
+          y += 16;
+          for (const ref of cluster.refs) {
+            const child = nodeRecords.get(ref.id), offset = manualOffsets[ref.id] || { dx: 0, dy: 0 };
+            child.x = record.x + offset.dx; child.y = y + offset.dy; placeNode(child); y += child.height + 12;
+          }
+        }
+      }
+      drawLines();
+    }
+    function finishNodeResize(event) {
+      if (!nodeResize || nodeResize.pointerId !== event.pointerId) return;
+      const ended = nodeResize; nodeResize = null;
+      if (ended.handle.hasPointerCapture(event.pointerId)) ended.handle.releasePointerCapture(event.pointerId);
+      applyNodeSize(ended.record); saveNodeSizes(); measureAndLayout(); renderLatest();
+    }
+    function addResizeHandle(record) {
+      const node = record.element;
+      if (node.resizeHandle) { node.resizeHandle.setAttribute('aria-label', currentLabels.resize); node.resizeHandle.title = currentLabels.resize; return; }
+      const proportional = record.kind === 'sketch' || (record.kind === 'reference' && isPicture(record.ref));
+      const primary = record.kind === 'sketch' ? 'ne' : 'se';
+      const edges = proportional ? ['w', 'e', 'n', 's', 'nw', 'ne', 'sw', 'se'] : ['w', 'e', 'nw', 'ne', 'sw', 'se'];
+      for (const edge of edges) {
+        const className = 'node-resize resize-' + edge + (edge.length === 1 ? ' resize-edge' : ' resize-corner');
+        const handle = edge === primary ? button('', currentLabels.resize, null, className) : element('div', className);
+        handle.dataset.resize = edge;
+        if (edge === primary) node.resizeHandle = handle;
+        else handle.setAttribute('aria-hidden', 'true');
+        node.append(handle);
+        handle.addEventListener('pointerdown', event => {
+          if (event.button !== 0 || nodeResize || gesture || pinch || connection) return;
+          event.preventDefault(); event.stopPropagation(); cancelGlide(); recordInteraction();
+          const current = nodeRecords.get(record.id); if (!current) return;
+          nodeResize = { pointerId: event.pointerId, handle, record: current, edge, x: event.clientX, y: event.clientY,
+            width: current.width, size: current.kind === 'sketch' ? sketchSize(current) : null,
+            left: current.x, top: current.y, right: current.x + current.width, bottom: current.y + current.height, zoom: view.z };
+          handle.setPointerCapture(event.pointerId);
+          if (edge === primary) handle.focus({ preventScroll: true });
+          applyNodeSize(current);
+        });
+        handle.addEventListener('pointermove', event => {
+          if (!nodeResize || nodeResize.handle !== handle || nodeResize.pointerId !== event.pointerId) return;
+          event.preventDefault(); event.stopPropagation(); recordInteraction();
+          nodeResize.scaling = edge.length === 2 && event.shiftKey;
+          resizeNodeLive(nodeResize, (event.clientX - nodeResize.x) / nodeResize.zoom, (event.clientY - nodeResize.y) / nodeResize.zoom);
+        });
+        handle.addEventListener('pointerup', finishNodeResize);
+        handle.addEventListener('pointercancel', finishNodeResize);
+        handle.addEventListener('dblclick', event => {
+          event.preventDefault(); event.stopPropagation(); recordInteraction();
+          delete nodeSizes[record.id]; applyNodeSize(nodeRecords.get(record.id)); saveNodeSizes(); measureAndLayout();
+        });
+        if (edge !== primary) continue;
+        handle.addEventListener('keydown', event => {
+          if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+          event.preventDefault(); event.stopPropagation(); cancelGlide(); recordInteraction();
+          const current = nodeRecords.get(record.id), change = event.key === 'ArrowRight' ? 20 : -20;
+          if (current.kind === 'sketch') {
+            const size = sketchSize(current);
+            size.scale = boundedNodeWidth(current, size.width * size.scale + change) / size.width; nodeSizes[record.id] = size;
+          } else {
+            const width = Object.prototype.hasOwnProperty.call(nodeSizes, record.id) ? nodeSizes[record.id] : defaultNodeWidth(current);
+            nodeSizes[record.id] = boundedNodeWidth(current, width + change);
+          }
+          applyNodeSize(current); saveNodeSizes(); measureAndLayout();
+        });
+      }
+    }
+    function measureAndLayout() {
+      if (!currentSession) return;
+      const sizes = [];
+      for (const record of nodeRecords.values()) if (record.kind === 'report' && record.target) applyNodeSize(record);
+      for (const record of nodeRecords.values()) {
+        record.width = record.element.offsetWidth; record.height = record.element.offsetHeight;
+        sizes.push({ id: record.id, width: record.width, height: record.height, kind: record.kind,
+          dependsOn: record.dependsOn || [], target: record.target || '', noteId: record.noteId || '' });
+      }
+      graph = layoutGraph(sizes);
+      for (const [id, point] of pendingDropPositions) {
+        const base = graph.positions[id];
+        if (base) { manualOffsets[id] = { dx: point.x - base.x, dy: point.y - base.y }; pendingDropPositions.delete(id); saveOffsets(); }
+      }
+      applyOffsets();
+      for (const cluster of graph.clusters) nodeRecords.get(cluster.id).element.setAttribute('aria-level', String(cluster.depth + 1));
+      world.querySelectorAll('.board-caption').forEach(node => node.remove());
+      if (graph.boardRefs.length) {
+        const caption = element('h2', 'caption board-caption', currentLabels.references);
+        caption.style.left = graph.boardRefX + 'px'; caption.style.top = '-28px'; world.append(caption);
+      }
+      if (graph.boardResearch.length) {
+        const caption = element('h2', 'caption board-caption', currentLabels.research);
+        caption.style.left = graph.boardRefX + 'px'; caption.style.top = graph.researchCaptionY + 'px'; world.append(caption);
+      }
+      drawLines();
+    }
+    function applyOffsets() {
+      if (!graph) return;
+      for (const record of nodeRecords.values()) {
+        const base = graph.positions[record.id]; if (!base) continue;
+        let dx = 0, dy = 0, id = record.id;
+        while (id) { const offset = manualOffsets[id]; if (offset) { dx += offset.dx; dy += offset.dy; } id = graph.parents[id]; }
+        record.x = base.x + dx; record.y = base.y + dy; placeNode(record);
+      }
+    }
+    function placeNode(record) { record.element.style.left = record.x + 'px'; record.element.style.top = record.y + 'px'; }
+    function selectQuestion(id) {
+      selectedQuestion = id;
+      for (const [key, card] of cardNodes) { card.classList.toggle('selected', key === id); card.setAttribute('aria-selected', String(key === id)); }
+      scheduleLines();
+    }
+
+    // Primary tree edges are permanent; secondary links and connector previews are transient.
+    function scheduleLines() {
+      if (lineFrame !== null) return;
+      lineFrame = requestAnimationFrame(() => { lineFrame = null; drawLines(); });
+    }
+    function drawLines() {
+      if (!graph || !connectorLayer || !socketLayer) return;
+      const paths = [], emphasized = [], sockets = new Map();
+      const active = new Set([selectedQuestion, hoveredQuestion]);
+      for (const record of nodeRecords.values()) {
+        const handle = record.element.querySelector('.connector-handle');
+        if (handle) handle.style.setProperty('--socket-color', 'var(--line)');
+      }
+      function endpoint(record, edge) {
+        const dx = edge === 'left' ? -1 : edge === 'right' ? 1 : 0;
+        const dy = edge === 'top' ? -1 : edge === 'bottom' ? 1 : 0;
+        return { record, edge, dx, dy, x: record.x + (dx + 1) * record.width / 2,
+          y: record.y + (dy + 1) * record.height / 2 };
+      }
+      let treeOut = 'bottom', treeIn = 'top', sketchOut = 'top', sketchIn = 'bottom', referenceIn = 'left';
+      if (flow === 'lr') { treeOut = 'right'; treeIn = 'left'; sketchOut = 'left'; sketchIn = 'right'; referenceIn = 'top'; }
+      function output(parent) {
+        const cluster = graph.clusters.find(item => item.id === parent.id);
+        const stacked = cluster ? cluster.reports.filter(report => {
+          const offset = manualOffsets[report.id]; return !offset || (!offset.dx && !offset.dy);
+        }).map(report => nodeRecords.get(report.id)) : [];
+        const lowest = [parent].concat(stacked).reduce((a, b) => a.y + a.height > b.y + b.height ? a : b);
+        return endpoint(lowest, 'bottom');
+      }
+      function socket(point, color, size, priority) {
+        if (!point.record) return;
+        const key = point.record.id + ':' + point.edge, previous = sockets.get(key);
+        if (!previous || previous.priority < priority) sockets.set(key, { point, color, size, priority });
+      }
+      function cable(start, end, color, width, dashed, highlight, secondary) {
+        const path = document.createElementNS(svgNamespace, 'path');
+        const distance = Math.max(40, Math.abs(start.dx ? end.x - start.x : end.y - start.y) / 2);
+        let d = 'M ' + start.x + ' ' + start.y + ' C ' + (start.x + start.dx * distance) + ' ' + (start.y + start.dy * distance)
+          + ', ' + (end.x + end.dx * distance) + ' ' + (end.y + end.dy * distance) + ', ' + end.x + ' ' + end.y;
+        if (secondary) {
+          const mid = (start.y + end.y) / 2;
+          d = 'M ' + start.x + ' ' + start.y + ' C ' + start.x + ' ' + mid + ', ' + end.x + ' ' + mid + ', ' + end.x + ' ' + end.y;
+          if (flow === 'lr') {
+            const mid = (start.x + end.x) / 2;
+            d = 'M ' + start.x + ' ' + start.y + ' C ' + mid + ' ' + start.y + ', ' + mid + ' ' + end.y + ', ' + end.x + ' ' + end.y;
+          }
+          path.dataset.secondary = 'true';
+        }
+        path.setAttribute('d', d); path.style.stroke = 'var(--' + color + ')';
+        path.style.strokeWidth = String(highlight ? 4 : width);
+        if (dashed) path.setAttribute('stroke-dasharray', secondary ? '5 5' : '8 6');
+        if (highlight) path.style.opacity = '1';
+        path.dataset.from = start.record.id; path.dataset.fromEdge = start.edge;
+        if (end.record) { path.dataset.to = end.record.id; path.dataset.toEdge = end.edge; }
+        (highlight ? emphasized : paths).push(path);
+      }
+      for (const edge of graph.edges) {
+        const parent = nodeRecords.get(edge.from), child = nodeRecords.get(edge.to);
+        if (!parent || !child) continue;
+        const status = currentSession.questions.find(q => q.id === child.id).status;
+        const color = { settled: 'green', asking: 'accent', researching: 'amber', waiting: 'line' }[status];
+        let start = output(parent);
+        if (flow === 'lr') start = endpoint(parent, treeOut);
+        const end = endpoint(child, treeIn);
+        cable(start, end, color, 3, status === 'waiting', active.has(parent.id) || active.has(child.id), false);
+        socket(start, 'muted', 10, 3); socket(end, color, 10, 3);
+      }
+      for (const id of active) {
+        const child = nodeRecords.get(id); if (!child) continue;
+        for (const parentId of graph.secondary[id] || []) {
+          const parent = nodeRecords.get(parentId); if (!parent) continue;
+          const start = endpoint(parent, treeOut), end = endpoint(child, treeIn);
+          cable(start, end, 'line', 1, true, false, true);
+          socket(start, 'line', 6, 1); socket(end, 'line', 6, 1);
+        }
+      }
+      for (const id of graph.sketches) {
+        const parent = nodeRecords.get(ideaId), child = nodeRecords.get(id);
+        if (!parent || !child) continue;
+        const start = endpoint(parent, sketchOut), end = endpoint(child, sketchIn);
+        cable(start, end, 'muted', 3, false, false, false);
+        socket(start, 'muted', 10, 3); socket(end, 'muted', 10, 3);
+      }
+      for (const record of nodeRecords.values()) {
+        if (record.kind !== 'reference' && record.kind !== 'report') continue;
+        const parent = nodeRecords.get(graph.parents[record.id]); if (!parent) continue;
+        const offset = manualOffsets[record.id], report = record.kind === 'report';
+        if (report && (!offset || (!offset.dx && !offset.dy))) continue;
+        let start = endpoint(parent, report ? 'bottom' : 'right'), end = endpoint(record, report ? 'top' : 'left');
+        if (flow === 'lr') {
+          if (report) {
+            const pairs = [];
+            for (const from of ['top', 'right', 'bottom', 'left']) for (const to of ['top', 'right', 'bottom', 'left']) {
+              pairs.push([endpoint(parent, from), endpoint(record, to)]);
+            }
+            [start, end] = pairs.sort((a, b) => Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) - Math.hypot(b[0].x - b[1].x, b[0].y - b[1].y))[0];
+          } else { start = output(parent); end = endpoint(record, referenceIn); }
+        }
+        const color = report ? 'violet' : 'line';
+        cable(start, end, color, 2, false, active.has(parent.id), false);
+        socket(start, color, 10, 2); socket(end, color, 10, 2);
+      }
+      if (connection) {
+        const start = endpoint(connection.record, referenceIn);
+        const end = { ...connection.point, dx: 1, dy: 0 };
+        if (flow === 'lr') { end.dx = 0; end.dy = 1; }
+        cable(start, end, 'accent', 3, false, false, false); socket(start, 'accent', 10, 4);
+        const target = [...nodeRecords.values()].find(record => record.element.classList.contains('drop-target'));
+        if (target) {
+          const nearest = ['top', 'right', 'bottom', 'left'].map(edge => endpoint(target, edge))
+            .sort((a, b) => Math.hypot(a.x - end.x, a.y - end.y) - Math.hypot(b.x - end.x, b.y - end.y))[0];
+          socket(nearest, 'accent', 10, 4);
+        }
+      }
+      const dots = [];
+      for (const { point, color, size } of sockets.values()) {
+        // A reference's interactive handle paints its socket instead of a duplicate circle.
+        const handle = point.edge === referenceIn && point.record.element.querySelector('.connector-handle');
+        if (handle) { handle.style.setProperty('--socket-color', 'var(--' + color + ')'); continue; }
+        const dot = document.createElementNS(svgNamespace, 'circle');
+        dot.setAttribute('cx', String(point.x)); dot.setAttribute('cy', String(point.y)); dot.setAttribute('r', String(size / 2 - 1));
+        dot.style.fill = 'var(--' + color + ')'; dot.dataset.node = point.record.id; dot.dataset.edge = point.edge;
+        dots.push(dot);
+      }
+      connectorLayer.replaceChildren(...paths, ...emphasized); socketLayer.replaceChildren(...dots);
+    }
+    // Camera controls share one transform and keep zoom anchored to screen points.
+    // The header floats over the top left corner: a wide screen gives up that strip only when a node would land under it.
+    function visibleArea(full) {
+      const narrow = window.innerWidth < 900;
+      const y = board.hidden || (full && !narrow) ? 0 : header.getBoundingClientRect().bottom + 8;
+      let right = window.innerWidth, bottom = window.innerHeight;
+      if (!specCollapsed) {
+        if (narrow) bottom = specPanel.getBoundingClientRect().top;
+        else right = specPanel.getBoundingClientRect().left;
+      }
+      return { x: 0, y, width: Math.max(1, right), height: Math.max(1, bottom - y) };
+    }
+    function underHeader(records, target) {
+      const box = header.getBoundingClientRect();
+      return records.some(node => node.x * target.z + target.x < box.right + 8 && node.y * target.z + target.y < box.bottom + 8);
+    }
+    function applyView() {
+      world.style.setProperty('--z', String(view.z)); world.classList.toggle('far', view.z < .5);
+      world.style.transform = 'translate(' + view.x + 'px, ' + view.y + 'px) scale(' + view.z + ')';
+      grid.style.setProperty('--dot-radius', view.z + 'px');
+      grid.style.backgroundSize = (24 * view.z) + 'px ' + (24 * view.z) + 'px';
+      grid.style.backgroundPosition = view.x + 'px ' + view.y + 'px';
+      const percent = document.getElementById('zoom-percent');
+      if (percent) percent.textContent = Math.round(view.z * 100) + '%';
+    }
+    function cancelGlide() { if (glideFrame !== null) cancelAnimationFrame(glideFrame); glideFrame = null; }
+    function worldPoint(x, y) { return { x: (x - view.x) / view.z, y: (y - view.y) / view.z }; }
+    function zoomAt(zoom, x, y) {
+      recordInteraction(); cancelGlide();
+      const point = worldPoint(x, y);
+      view.z = Math.max(.2, Math.min(2, zoom)); view.x = x - point.x * view.z; view.y = y - point.y * view.z;
+      applyView();
+    }
+    function zoomCenter(factor) { zoomAt(view.z * factor, window.innerWidth / 2, window.innerHeight / 2); }
+    function fitToScreen(animate) {
+      if (!nodeRecords.size) return;
+      recordInteraction();
+      cancelGlide();
+      const records = [...nodeRecords.values()];
+      const left = Math.min(...records.map(node => node.x));
+      const right = Math.max(...records.map(node => node.x + node.width));
+      const top = Math.min(...records.map(node => node.y)) - 28;
+      const bottom = Math.max(...records.map(node => node.y + node.height));
+      function target(area) {
+        const z = Math.max(.2, Math.min(1, (area.width - 80) / Math.max(1, right - left), (area.height - 80) / Math.max(1, bottom - top)));
+        return { x: area.x + area.width / 2 - (left + right) / 2 * z, y: area.y + area.height / 2 - (top + bottom) / 2 * z, z };
+      }
+      let end = target(visibleArea(true));
+      if (underHeader(records, end)) end = target(visibleArea());
+      glideView(end, animate === true);
+    }
+    // Focus the current frontier while respecting recent manual navigation.
+    function recordInteraction() { lastInteraction = Date.now(); }
+    function focusView(animate, only) {
+      if (!graph) return;
+      let ids = only || currentSession.questions.filter(q => q.status === 'asking').map(q => q.id);
+      if (!ids.length) ids = [ideaId].concat((graph.levels[1] || []).map(node => node.id));
+      const records = [];
+      for (const id of ids) {
+        const card = nodeRecords.get(id); if (card) records.push(card);
+        const cluster = graph.clusters.find(node => node.id === id);
+        if (cluster) for (const note of cluster.refs.concat(cluster.reports)) { const record = nodeRecords.get(note.id); if (record) records.push(record); }
+      }
+      if (!records.length) return;
+      const minimum = only ? .4 : .7;
+      function target(area) {
+        const kept = records.slice();
+        function bounds() {
+          return { left: Math.min(...kept.map(node => node.x)), right: Math.max(...kept.map(node => node.x + node.width)),
+            top: Math.min(...kept.map(node => node.y)), bottom: Math.max(...kept.map(node => node.y + node.height)) };
+        }
+        function fit(box) { return Math.min(1, Math.max(1, area.width - 80) / Math.max(1, box.right - box.left), Math.max(1, area.height - 80) / Math.max(1, box.bottom - box.top)); }
+        let box = bounds();
+        const overflow = fit(box) < minimum;
+        while (kept.length > 1 && fit(box) < minimum) { kept.pop(); box = bounds(); }
+        const z = Math.max(minimum, fit(box));
+        const x = overflow && (box.right - box.left) * z > area.width
+          ? area.x + 16 - box.left * z : area.x + area.width / 2 - (box.left + box.right) / 2 * z;
+        const y = overflow ? area.y + 24 - box.top * z : area.y + area.height / 2 - (box.top + box.bottom) / 2 * z;
+        return { kept, end: { x, y, z } };
+      }
+      let result = target(visibleArea(true));
+      if (underHeader(result.kept, result.end)) result = target(visibleArea());
+      glideView(result.end, animate);
+    }
+    function glideView(end, animate) {
+      cancelGlide();
+      if (!animate || reducedMotion()) { view = end; applyView(); return; }
+      const start = { ...view }; let started = null;
+      function step(time) {
+        if (started === null) started = time;
+        const progress = Math.min(1, (time - started) / 300), eased = 1 - Math.pow(1 - progress, 3);
+        view = { x: start.x + (end.x - start.x) * eased, y: start.y + (end.y - start.y) * eased, z: start.z + (end.z - start.z) * eased };
+        applyView(); glideFrame = progress < 1 ? requestAnimationFrame(step) : null;
+      }
+      glideFrame = requestAnimationFrame(step);
+    }
+    // Switching reuses the mounted nodes and preserves readers, overlays, and selection.
+    function toggleFlow() {
+      if (gesture || pinch || connection || nodeResize) return;
+      recordInteraction(); saveOffsets();
+      flow = flow === 'td' ? 'lr' : 'td';
+      try { localStorage.setItem(flowKey, flow); } catch (_) { /* The setting is optional when storage is unavailable. */ }
+      document.documentElement.dataset.flow = flow;
+      manualOffsets = readOffsets(); measureAndLayout(); updateFlowButton(); fitToScreen(true);
+    }
+    function updateFlowButton() {
+      const control = toolbar.querySelector('.flow-toggle'), label = currentLabels[flow === 'td' ? 'flowTd' : 'flowLr'];
+      control.textContent = flow === 'td' ? '↓' : '→'; control.title = label; control.setAttribute('aria-label', label);
+    }
+    function renderToolbar() {
+      const percent = element('span'); percent.id = 'zoom-percent'; percent.setAttribute('aria-live', 'off');
+      toolbar.setAttribute('aria-label', currentLabels.toolbar);
+      toolbar.replaceChildren(
+        button('−', currentLabels.zoomOut, () => zoomCenter(1 / 1.2)), percent,
+        button('+', currentLabels.zoomIn, () => zoomCenter(1.2)),
+        button('⊡', currentLabels.fit, fitToScreen),
+        button('◎', currentLabels.focusRound, () => { recordInteraction(); focusView(false); }),
+        button('', '', toggleFlow, 'flow-toggle'),
+        button('↺', currentLabels.resetLayout, () => { manualOffsets = Object.create(null); nodeSizes = Object.create(null); saveOffsets(); saveNodeSizes();
+          for (const record of nodeRecords.values()) applyNodeSize(record);
+          measureAndLayout(); fitToScreen(); })
+      );
+      updateFlowButton();
+      applyView();
+    }
+    function updateFloatingControls() {
+      const bottom = window.innerWidth < 900 && !specCollapsed ? window.innerHeight - specPanel.getBoundingClientRect().top + 8 : 16;
+      toolbar.style.bottom = bottom + 'px';
+    }
+    function updateSpec() {
+      specPanel.classList.toggle('collapsed', specCollapsed);
+      specToggle.textContent = specCollapsed ? currentLabels.spec : '×';
+      applyPanelWidth();
+      specToggle.setAttribute('aria-label', currentLabels.toggleSpec);
+      specToggle.setAttribute('aria-expanded', String(!specCollapsed));
+      specToggle.title = currentLabels.toggleSpec;
+      updateFloatingControls();
+    }
+    specToggle.addEventListener('click', () => { specCollapsed = !specCollapsed; updateSpec(); });
+    let wasNarrow = window.innerWidth < 900;
+    window.addEventListener('resize', () => {
+      const narrow = window.innerWidth < 900;
+      if (narrow && !wasNarrow) { specCollapsed = true; updateSpec(); }
+      wasNarrow = narrow; updateSpec(); scaleEnlargedSketch(); applyView();
+    });
+
+    // Pointer capture handles pans, node drags, and two-finger touch pinches.
+    const pointers = new Map();
+    let gesture = null;
+    let pinch = null;
+    let suppressClickUntil = 0;
+    function touchPair() { return [...pointers.values()].filter(pointer => pointer.type === 'touch').slice(0, 2); }
+    function beginPinch() {
+      const pair = touchPair(); if (pair.length !== 2) return;
+      if (gesture && gesture.dragged && gesture.record) {
+        if (gesture.inlineRef) discardInlineDrag(gesture);
+        else saveOffsets();
+      }
+      const x = (pair[0].x + pair[1].x) / 2, y = (pair[0].y + pair[1].y) / 2;
+      pinch = { distance: Math.max(1, Math.hypot(pair[0].x - pair[1].x, pair[0].y - pair[1].y)), zoom: view.z, point: worldPoint(x, y) };
+      gesture = null; suppressClickUntil = Date.now() + 500; clearDropTarget();
+    }
+    function discardInlineDrag(ended) {
+      ended.record.element.remove(); nodeRecords.delete(ended.record.id);
+      delete manualOffsets[ended.record.id]; delete graph.positions[ended.record.id]; delete graph.parents[ended.record.id]; saveOffsets(); scheduleLines();
+    }
+    function refByNodeId(id) { return currentUserRefs.find(ref => refNodeId(ref) === id); }
+    canvas.addEventListener('pointerdown', event => {
+      if (nodeResize) { event.preventDefault(); return; }
+      if (event.button !== 0) return;
+      if (event.target.closest('.connector-handle')) {
+        const node = event.target.closest('.node'); const record = node && nodeRecords.get(node.dataset.nodeId);
+        if (!serverMode || !record || !record.ref || !record.ref.user) return;
+        event.preventDefault(); cancelGlide(); recordInteraction(); canvas.setPointerCapture(event.pointerId);
+        connection = { pointerId: event.pointerId, record, point: worldPoint(event.clientX, event.clientY) };
+        scheduleLines(); return;
+      }
+      if (event.target.closest('textarea, input, a, .delete-ref, .ref-note, .disconnect-ref, .details-toggle, .research-chip, .node-resize')) return;
+      cancelGlide(); event.preventDefault();
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
+      canvas.setPointerCapture(event.pointerId);
+      if (touchPair().length >= 2) { recordInteraction(); beginPinch(); return; }
+      const node = event.target.closest('.node');
+      const inline = event.target.closest('[data-inline-ref]');
+      const inlineRef = inline && inline.classList.contains('tile-picture') && serverMode && refByNodeId(inline.dataset.inlineRef);
+      const record = node && nodeRecords.get(node.dataset.nodeId);
+      gesture = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: view.x, y: view.y,
+        record, offsetX: record && manualOffsets[record.id] ? manualOffsets[record.id].dx : 0,
+        offsetY: record && manualOffsets[record.id] ? manualOffsets[record.id].dy : 0, dragged: false, inlineRef,
+        question: node && node.dataset.questionId, picture: event.target.closest('[data-picture]') };
+      if (record) record.element.focus({ preventScroll: true });
+    });
+    canvas.addEventListener('pointermove', event => {
+      if (connection && connection.pointerId === event.pointerId) {
+        connection.point = worldPoint(event.clientX, event.clientY);
+        setDropTarget(connectionTargetAt(event.clientX, event.clientY)); scheduleLines(); return;
+      }
+      if (!pointers.has(event.pointerId)) return;
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
+      if (pinch) {
+        recordInteraction();
+        const pair = touchPair(); if (pair.length < 2) return;
+        const x = (pair[0].x + pair[1].x) / 2, y = (pair[0].y + pair[1].y) / 2;
+        view.z = Math.max(.2, Math.min(2, pinch.zoom * Math.hypot(pair[0].x - pair[1].x, pair[0].y - pair[1].y) / pinch.distance));
+        view.x = x - pinch.point.x * view.z; view.y = y - pinch.point.y * view.z; applyView(); return;
+      }
+      if (!gesture || gesture.pointerId !== event.pointerId) return;
+      const dx = event.clientX - gesture.startX, dy = event.clientY - gesture.startY;
+      if (!gesture.dragged && Math.hypot(dx, dy) < 4) return;
+      if (!gesture.dragged && gesture.inlineRef) {
+        // An option picture becomes a temporary reference card while it is dragged.
+        const ref = gesture.inlineRef, point = worldPoint(gesture.startX, gesture.startY);
+        const card = referenceCard(ref), id = refNodeId(ref);
+        registerNode(id, card, { kind: 'reference', target: '', ref });
+        const record = nodeRecords.get(id); record.width = card.offsetWidth; record.height = card.offsetHeight;
+        record.x = point.x - 100; record.y = point.y - 40;
+        graph.positions[id] = { x: record.x, y: record.y }; graph.parents[id] = null;
+        delete manualOffsets[id]; gesture.record = record; gesture.offsetX = 0; gesture.offsetY = 0;
+      }
+      recordInteraction();
+      gesture.dragged = true; canvas.classList.add('dragging');
+      if (gesture.record) {
+        const record = gesture.record;
+        manualOffsets[record.id] = { dx: gesture.offsetX + dx / view.z, dy: gesture.offsetY + dy / view.z };
+        applyOffsets(); scheduleLines();
+        if (record.ref && record.ref.user && serverMode) setDropTarget(connectionTargetAt(event.clientX, event.clientY, record.id));
+      } else { view.x = gesture.x + dx; view.y = gesture.y + dy; applyView(); }
+    });
+    async function endPointer(event, canceled) {
+      if (connection && connection.pointerId === event.pointerId) {
+        const ended = connection; connection = null;
+        const target = canceled ? '' : connectionTargetAt(event.clientX, event.clientY);
+        if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+        suppressClickUntil = Date.now() + 500; clearDropTarget(); scheduleLines();
+        if (target) {
+          try { await updateReferenceTarget(ended.record.ref, target); }
+          catch (error) { toast(currentLabels.refFailed + ': ' + error.message); }
+        }
+        renderLatest(); return;
+      }
+      if (!pointers.has(event.pointerId)) return;
+      pointers.delete(event.pointerId);
+      if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+      if (pinch) {
+        suppressClickUntil = Date.now() + 500;
+        pinch = null;
+        const remaining = [...pointers.entries()][0];
+        gesture = remaining ? { pointerId: remaining[0], startX: remaining[1].x, startY: remaining[1].y, x: view.x, y: view.y, dragged: true } : null;
+        return;
+      }
+      if (!gesture || gesture.pointerId !== event.pointerId) return;
+      const ended = gesture; gesture = null;
+      canvas.classList.remove('dragging'); clearDropTarget();
+      if (ended.dragged) {
+        suppressClickUntil = Date.now() + 500;
+        if (ended.record) {
+          if (canceled && ended.inlineRef) { discardInlineDrag(ended); renderLatest(); return; }
+          saveOffsets();
+          const ref = ended.record.ref;
+          const target = connectionTargetAt(event.clientX, event.clientY, ended.record.id);
+          if (!canceled && ref && ref.user && serverMode && (target || ended.inlineRef)) {
+            try {
+              await updateReferenceTarget(ref, target);
+            } catch (error) {
+              toast(currentLabels.refFailed + ': ' + error.message);
+              if (ended.inlineRef) discardInlineDrag(ended);
+            }
+          }
+        }
+      } else if (!canceled) {
+        selectQuestion(ended.question || '');
+        if (ended.record && ended.record.kind === 'report') openReader(ended.record.note.id);
+        if (ended.record && ended.record.kind === 'sketch') openEnlargedSketch(ended.record.element.dataset.sketchId);
+        if (ended.picture) { suppressClickUntil = Date.now() + 500; openLightbox(ended.picture.pictureReference); }
+      }
+      renderLatest();
+    }
+    canvas.addEventListener('pointerup', event => endPointer(event, false));
+    canvas.addEventListener('pointercancel', event => endPointer(event, true));
+    canvas.addEventListener('click', event => {
+      if (Date.now() < suppressClickUntil) { event.preventDefault(); event.stopImmediatePropagation(); }
+    }, true);
+    canvas.addEventListener('wheel', event => {
+      if (event.target.closest('textarea, input')) return;
+      event.preventDefault(); recordInteraction(); cancelGlide();
+      if (event.ctrlKey || event.metaKey) zoomAt(view.z * Math.exp(-event.deltaY * .002), event.clientX, event.clientY);
+      else {
+        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
+        view.x -= event.deltaX * unit; view.y -= event.deltaY * unit; applyView();
+      }
+    }, { passive: false });
+    // Hit testing uses shown coordinates even while pointer capture hides the drop target.
+    function cardTargetAt(x, y, includeIdea, excludeId) {
+      if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return '';
+      const top = document.elementFromPoint(x, y);
+      if (top && top.closest('#spec-panel, #toolbar, #lightbox, #reader')) return '';
+      const point = worldPoint(x, y);
+      const ids = [...cardNodes.keys()].reverse(); if (includeIdea) ids.push(ideaId);
+      for (const id of ids) {
+        const record = nodeRecords.get(id);
+        if (id !== excludeId && point.x >= record.x && point.x <= record.x + record.width && point.y >= record.y && point.y <= record.y + record.height) return id === ideaId ? 'idea' : id;
+      }
+      return '';
+    }
+    function questionAt(x, y, excludeId) { return cardTargetAt(x, y, false, excludeId); }
+    function connectionTargetAt(x, y, excludeId) { return cardTargetAt(x, y, true, excludeId); }
+    function clearDropTarget() {
+      for (const card of cardNodes.values()) card.classList.remove('drop-target');
+      const idea = nodeRecords.get(ideaId); if (idea) idea.element.classList.remove('drop-target');
+    }
+    function setDropTarget(id) {
+      clearDropTarget(); const record = nodeRecords.get(id === 'idea' ? ideaId : id);
+      if (record) record.element.classList.add('drop-target');
+    }
+
+    // Same-origin board API writes always carry the shared contract header.
+    async function apiRequest(path, method, body, contentType) {
+      const headers = { 'X-Grill-Board': '1' };
+      const options = { method, headers, cache: 'no-store', credentials: 'same-origin' };
+      if (body !== undefined) {
+        headers['Content-Type'] = contentType || 'application/json';
+        options.body = contentType ? body : JSON.stringify(body);
+      }
+      const response = await fetch(new URL(path, window.location.href), options);
+      let data;
+      try { data = await response.json(); } catch (_) { throw new Error(response.statusText || String(response.status)); }
+      if (!response.ok || !data || data.ok !== true) throw new Error(string(data && data.error) || response.statusText || String(response.status));
+      return data;
+    }
+    async function detectServer() {
+      if (!/^https?:$/.test(window.location.protocol)) return;
+      try {
+        const response = await fetch(new URL('api/ping', window.location.href), { cache: 'no-store', credentials: 'same-origin' });
+        const data = await response.json(); serverMode = response.ok && data.ok === true && data.board === 1;
+      } catch (_) { serverMode = false; }
+      syncResearchSteps();
+      if (serverMode && currentSession) { lastRenderedJson = null; renderLatest(); }
+    }
+    function singleWebUrl(text) {
+      const value = string(text).trim();
+      if (!/^https?:\/\/\S+$/i.test(value)) return '';
+      try { const url = new URL(value); return /^https?:$/.test(url.protocol) ? value : ''; } catch (_) { return ''; }
+    }
+    function transferUrl(transfer) {
+      const lines = string(transfer.getData('text/uri-list')).split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+      return lines.map(singleWebUrl).find(Boolean) || singleWebUrl(transfer.getData('text/plain'));
+    }
+    async function addReference(file, url, target, position) {
+      try {
+        let data;
+        if (file) {
+          if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type)) { toast(currentLabels.badType); return; }
+          const query = new URLSearchParams({ target, name: file.name || '' });
+          data = await apiRequest('api/refs?' + query, 'POST', file, file.type);
+        } else data = await apiRequest('api/refs', 'POST', { url, target });
+        if (data.ref && data.ref.id) {
+          pendingHighlights.add(refNodeId({ id: data.ref.id, user: true }));
+          if (position) {
+            pendingDropPositions.set(refNodeId({ id: data.ref.id, user: true }), { x: position.x, y: position.y });
+          }
+        }
+        await loadFiles(); toast(currentLabels.refAdded);
+      } catch (error) { toast(currentLabels.refFailed + ': ' + error.message); }
+    }
+    let dragDepth = 0;
+    window.addEventListener('dragenter', event => { event.preventDefault(); dragDepth++; dropHint.textContent = currentLabels.dropHint; dropHint.hidden = false; });
+    window.addEventListener('dragover', event => {
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+      dropHint.textContent = currentLabels.dropHint; dropHint.hidden = false;
+      setDropTarget(questionAt(event.clientX, event.clientY));
+    });
+    window.addEventListener('dragleave', event => { event.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; dropHint.hidden = true; clearDropTarget(); } });
+    window.addEventListener('drop', async event => {
+      event.preventDefault(); dragDepth = 0; dropHint.hidden = true; clearDropTarget();
+      const transfer = event.dataTransfer; if (!transfer) return;
+      const files = Array.from(transfer.files || []), url = files.length ? '' : transferUrl(transfer);
+      if (!files.length && !url) return;
+      if (!serverMode) { toast(currentLabels.needServer); return; }
+      const target = questionAt(event.clientX, event.clientY), point = worldPoint(event.clientX, event.clientY);
+      if (files.length) {
+        for (let i = 0; i < files.length; i++) await addReference(files[i], '', target, target ? null : { x: point.x + i * 24, y: point.y + i * 24 });
+      } else await addReference(null, url, target, target ? null : point);
+    });
+    window.addEventListener('paste', async event => {
+      if (document.activeElement && document.activeElement.closest('input, textarea, [contenteditable="true"]')) return;
+      const transfer = event.clipboardData; if (!transfer) return;
+      const items = Array.from(transfer.items || []).filter(item => item.kind === 'file').map(item => item.getAsFile()).filter(Boolean);
+      const files = items.length ? items : Array.from(transfer.files || []);
+      const url = files.length ? '' : singleWebUrl(transfer.getData('text/plain'));
+      if (!files.length && !url) return;
+      event.preventDefault();
+      if (!serverMode) { toast(currentLabels.needServer); return; }
+      const target = selectedQuestion;
+      if (files.length) { for (const file of files) await addReference(file, '', target, null); }
+      else await addReference(null, url, target, null);
+    });
+
+    // Poll both script globals together, preserving the last good session on errors.
+    let failedReads = 0;
+    let lastRenderedJson = null;
+    let latestSession = null;
+    let latestUserRefs = [];
+    let latestUser = null;
+    let loading = null;
+    let reloadRequested = false;
+    function readScript(url, globalName) {
+      return new Promise(resolve => {
+        window[globalName] = undefined;
+        const script = element('script');
+        const address = new URL(url); address.searchParams.set('t', String(Date.now())); script.src = address.href;
+        let finished = false;
+        const timeout = setTimeout(() => finish(null), 3000);
+        function finish(value) {
+          if (finished) return;
+          finished = true; clearTimeout(timeout); script.remove(); resolve(value);
+        }
+        script.onload = () => {
+          const data = window[globalName];
+          if (!data || typeof data !== 'object' || Array.isArray(data)) { finish(null); return; }
+          try { JSON.stringify(data); finish(data); } catch (_) { finish(null); }
+        };
+        script.onerror = () => finish(null);
+        document.head.append(script);
+      });
+    }
+    function renderLatest() {
+      if (!latestSession || gesture || pinch || connection || nodeResize || document.querySelector('.note-editor')) return;
+      const json = JSON.stringify([latestSession, latestUser]);
+      if (json === lastRenderedJson) return;
+      render(latestSession, latestUserRefs); lastRenderedJson = json;
+    }
+    function loadFiles(force) {
+      if (loading) {
+        if (force !== false) reloadRequested = true;
+        return loading;
+      }
+      loading = (async () => {
+        do {
+          reloadRequested = false;
+          const [session, user] = await Promise.all([readScript(sessionUrl, '__GRILL__'), readScript(userUrl, '__GRILL_USER__')]);
+          latestUser = user; latestUserRefs = user ? array(user.refs) : [];
+          if (session) { latestSession = session; failedReads = 0; warning.hidden = true; }
+          else {
+            failedReads++;
+            if (failedReads >= 3) { warning.textContent = currentLabels.warnUnreadable + '\n' + sessionUrl; warning.hidden = false; }
+          }
+          renderLatest();
+        } while (reloadRequested);
+      })().finally(() => { loading = null; });
+      return loading;
+    }
+    applyView(); updateSpec(); detectServer(); loadFiles();
+    setInterval(() => loadFiles(false), 1000);
+  </script>
+</body>
+</html>
