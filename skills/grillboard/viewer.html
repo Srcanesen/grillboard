@@ -386,8 +386,74 @@
   </script>
   <!-- The camera block is separate from the session block: it knows rectangles, not questions. -->
   <script id="grill-camera">
-    // GrillCamera: where the view should move, computed from plain rectangles.
-    const GrillCamera = {};
+    // fit(boxes, screen) -> { x, y, z }, fitting nonempty board rectangles at zoom .2 to 1.
+    // focus(boxes, screen, { minimum }) -> { x, y, z }, keeping a fitting prefix at minimum .7 or .4.
+    // isFar(z) -> boolean, whether the view uses the far presentation.
+    // boxes: { x, y, width, height }[]; screen: { width, height, boardHidden,
+    // header: { right, bottom }, toolbar: { right, top }, roundBar: { top } | null,
+    // specPanel: { left, top } | null }; null means hidden round bar or collapsed spec panel.
+    const GrillCamera = (() => {
+      function visibleArea(screen, full, aboveToolbar) {
+        const narrow = screen.width < 900;
+        const y = screen.boardHidden || (full && !narrow) ? 0 : screen.header.bottom + 8;
+        let right = screen.width, bottom = screen.height;
+        if (screen.specPanel) {
+          if (narrow) bottom = screen.specPanel.top;
+          else right = screen.specPanel.left;
+        }
+        if (screen.roundBar) bottom = Math.min(bottom, screen.roundBar.top - 8);
+        if (aboveToolbar) bottom = Math.min(bottom, screen.toolbar.top - 8);
+        return { x: 0, y, width: Math.max(1, right), height: Math.max(1, bottom - y) };
+      }
+      function underHeader(boxes, target, screen) {
+        const box = screen.header;
+        return boxes.some(node => node.x * target.z + target.x < box.right + 8 && node.y * target.z + target.y < box.bottom + 8);
+      }
+      function underToolbar(boxes, target, screen) {
+        const box = screen.toolbar;
+        return boxes.some(node => node.x * target.z + target.x < box.right + 8 && (node.y + node.height) * target.z + target.y > box.top - 8);
+      }
+      function avoidControls(screen, target) {
+        let full = true, result = target(visibleArea(screen, full));
+        if (underHeader(result.kept, result.end, screen)) { full = false; result = target(visibleArea(screen, full)); }
+        if (underToolbar(result.kept, result.end, screen)) {
+          result = target(visibleArea(screen, full, true));
+          if (full && underHeader(result.kept, result.end, screen)) result = target(visibleArea(screen, false, true));
+        }
+        return result.end;
+      }
+      function fit(boxes, screen) {
+        const left = Math.min(...boxes.map(node => node.x));
+        const right = Math.max(...boxes.map(node => node.x + node.width));
+        const top = Math.min(...boxes.map(node => node.y)) - 28;
+        const bottom = Math.max(...boxes.map(node => node.y + node.height));
+        return avoidControls(screen, area => {
+          const z = Math.max(.2, Math.min(1, (area.width - 80) / Math.max(1, right - left), (area.height - 80) / Math.max(1, bottom - top)));
+          const end = { x: area.x + area.width / 2 - (left + right) / 2 * z, y: area.y + area.height / 2 - (top + bottom) / 2 * z, z };
+          return { kept: boxes, end };
+        });
+      }
+      function focus(boxes, screen, options) {
+        const minimum = options.minimum;
+        return avoidControls(screen, area => {
+          const kept = boxes.slice();
+          function bounds() {
+            return { left: Math.min(...kept.map(node => node.x)), right: Math.max(...kept.map(node => node.x + node.width)),
+              top: Math.min(...kept.map(node => node.y)), bottom: Math.max(...kept.map(node => node.y + node.height)) };
+          }
+          function fit(box) { return Math.min(1, Math.max(1, area.width - 80) / Math.max(1, box.right - box.left), Math.max(1, area.height - 80) / Math.max(1, box.bottom - box.top)); }
+          let box = bounds();
+          const overflow = fit(box) < minimum;
+          while (kept.length > 1 && fit(box) < minimum) { kept.pop(); box = bounds(); }
+          const z = Math.max(minimum, fit(box));
+          const x = overflow && (box.right - box.left) * z > area.width
+            ? area.x + 16 - box.left * z : area.x + area.width / 2 - (box.left + box.right) / 2 * z;
+          const y = overflow ? area.y + 24 - box.top * z : area.y + area.height / 2 - (box.top + box.bottom) / 2 * z;
+          return { kept, end: { x, y, z } };
+        });
+      }
+      return { fit, focus, isFar: z => z < .5 };
+    })();
   </script>
   <script>
     // UI labels, including Markdown headings.
@@ -2132,28 +2198,16 @@
     // Camera controls share one transform and keep zoom anchored to screen points.
     // The header floats over the top left corner and the toolbar over the bottom left one:
     // a wide screen gives up either strip only when a node would land under it.
-    function visibleArea(full, aboveToolbar) {
-      const narrow = window.innerWidth < 900;
-      const y = board.hidden || (full && !narrow) ? 0 : header.getBoundingClientRect().bottom + 8;
-      let right = window.innerWidth, bottom = window.innerHeight;
-      if (!specCollapsed) {
-        if (narrow) bottom = specPanel.getBoundingClientRect().top;
-        else right = specPanel.getBoundingClientRect().left;
-      }
-      if (!roundBar.hidden) bottom = Math.min(bottom, roundBar.getBoundingClientRect().top - 8);
-      if (aboveToolbar) bottom = Math.min(bottom, toolbar.getBoundingClientRect().top - 8);
-      return { x: 0, y, width: Math.max(1, right), height: Math.max(1, bottom - y) };
-    }
-    function underHeader(records, target) {
-      const box = header.getBoundingClientRect();
-      return records.some(node => node.x * target.z + target.x < box.right + 8 && node.y * target.z + target.y < box.bottom + 8);
-    }
-    function underToolbar(records, target) {
-      const box = toolbar.getBoundingClientRect();
-      return records.some(node => node.x * target.z + target.x < box.right + 8 && (node.y + node.height) * target.z + target.y > box.top - 8);
+    function measureScreen() {
+      const headerBox = header.getBoundingClientRect(), toolbarBox = toolbar.getBoundingClientRect();
+      const specBox = specCollapsed ? null : specPanel.getBoundingClientRect();
+      return { width: window.innerWidth, height: window.innerHeight, boardHidden: board.hidden,
+        header: { right: headerBox.right, bottom: headerBox.bottom }, toolbar: { right: toolbarBox.right, top: toolbarBox.top },
+        roundBar: roundBar.hidden ? null : { top: roundBar.getBoundingClientRect().top },
+        specPanel: specBox ? { left: specBox.left, top: specBox.top } : null };
     }
     function applyView() {
-      world.style.setProperty('--z', String(view.z)); world.classList.toggle('far', view.z < .5);
+      world.style.setProperty('--z', String(view.z)); world.classList.toggle('far', GrillCamera.isFar(view.z));
       world.style.transform = 'translate(' + view.x + 'px, ' + view.y + 'px) scale(' + view.z + ')';
       grid.style.setProperty('--dot-radius', view.z + 'px');
       grid.style.backgroundSize = (24 * view.z) + 'px ' + (24 * view.z) + 'px';
@@ -2174,22 +2228,8 @@
       if (!nodeRecords.size) return;
       recordInteraction();
       cancelGlide();
-      const records = [...nodeRecords.values()];
-      const left = Math.min(...records.map(node => node.x));
-      const right = Math.max(...records.map(node => node.x + node.width));
-      const top = Math.min(...records.map(node => node.y)) - 28;
-      const bottom = Math.max(...records.map(node => node.y + node.height));
-      function target(area) {
-        const z = Math.max(.2, Math.min(1, (area.width - 80) / Math.max(1, right - left), (area.height - 80) / Math.max(1, bottom - top)));
-        return { x: area.x + area.width / 2 - (left + right) / 2 * z, y: area.y + area.height / 2 - (top + bottom) / 2 * z, z };
-      }
-      let full = true, end = target(visibleArea(full));
-      if (underHeader(records, end)) { full = false; end = target(visibleArea(full)); }
-      if (underToolbar(records, end)) {
-        end = target(visibleArea(full, true));
-        if (full && underHeader(records, end)) end = target(visibleArea(false, true));
-      }
-      glideView(end, animate === true);
+      const boxes = [...nodeRecords.values()].map(({ x, y, width, height }) => ({ x, y, width, height }));
+      glideView(GrillCamera.fit(boxes, measureScreen()), animate === true);
     }
     // Focus the current frontier while respecting recent manual navigation.
     function recordInteraction() { lastInteraction = Date.now(); }
@@ -2204,30 +2244,8 @@
         if (cluster) for (const note of cluster.refs.concat(cluster.reports)) { const record = nodeRecords.get(note.id); if (record) records.push(record); }
       }
       if (!records.length) return;
-      const minimum = only ? .4 : .7;
-      function target(area) {
-        const kept = records.slice();
-        function bounds() {
-          return { left: Math.min(...kept.map(node => node.x)), right: Math.max(...kept.map(node => node.x + node.width)),
-            top: Math.min(...kept.map(node => node.y)), bottom: Math.max(...kept.map(node => node.y + node.height)) };
-        }
-        function fit(box) { return Math.min(1, Math.max(1, area.width - 80) / Math.max(1, box.right - box.left), Math.max(1, area.height - 80) / Math.max(1, box.bottom - box.top)); }
-        let box = bounds();
-        const overflow = fit(box) < minimum;
-        while (kept.length > 1 && fit(box) < minimum) { kept.pop(); box = bounds(); }
-        const z = Math.max(minimum, fit(box));
-        const x = overflow && (box.right - box.left) * z > area.width
-          ? area.x + 16 - box.left * z : area.x + area.width / 2 - (box.left + box.right) / 2 * z;
-        const y = overflow ? area.y + 24 - box.top * z : area.y + area.height / 2 - (box.top + box.bottom) / 2 * z;
-        return { kept, end: { x, y, z } };
-      }
-      let full = true, result = target(visibleArea(full));
-      if (underHeader(result.kept, result.end)) { full = false; result = target(visibleArea(full)); }
-      if (underToolbar(result.kept, result.end)) {
-        result = target(visibleArea(full, true));
-        if (full && underHeader(result.kept, result.end)) result = target(visibleArea(false, true));
-      }
-      glideView(result.end, animate);
+      const boxes = records.map(({ x, y, width, height }) => ({ x, y, width, height }));
+      glideView(GrillCamera.focus(boxes, measureScreen(), { minimum: only ? .4 : .7 }), animate);
     }
     function glideView(end, animate) {
       cancelGlide();
