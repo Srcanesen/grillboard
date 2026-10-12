@@ -34,6 +34,16 @@ Without Python, the skill instructs the agent to open the copied `index.html` di
 
 ## Install
 
+With Node.js installed, one command installs the skill into the current project and asks which agents to set it up for:
+
+```sh
+npx skills add Srcanesen/grillboard
+```
+
+Add `-g` to install it for every project. This uses the open [`skills`](https://github.com/vercel-labs/skills) installer.
+
+### Manual install
+
 Clone the repository:
 
 ```sh
