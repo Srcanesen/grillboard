@@ -3,6 +3,8 @@ name: visual-grilling
 description: Grill the user about a plan, decision, or idea while a live board in their browser draws the design tree, the references and the spec as it settles. Use when the user asks for a visual grill, or wants to see the decisions while being grilled.
 ---
 
+<!-- "The interview" is adapted from the grilling skill in mattpocock/skills (MIT). See CREDITS.md. -->
+
 Interview the user relentlessly until you reach a shared understanding, and keep a live **board** in their browser where they watch the idea take shape: each settled decision becomes a piece of the tree, each open question a gap still to fill, and the spec grows beside it.
 
 Hold the whole session in the language the user opened it in: the chat, every text you put on the board, and `lang`.
