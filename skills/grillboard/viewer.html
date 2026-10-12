@@ -790,8 +790,72 @@
   </script>
   <!-- The changes block compares two session models: what is new, what to highlight, where to look. -->
   <script id="grill-changes">
-    // GrillChanges: what changed between the last render and this one.
-    const GrillChanges = {};
+    // between(previous, current, context = {}) -> { highlights: { [nodeId]: reason[] }, collapsedQuestions: questionId[], research: { [noteId]: { previousStatus: string | null, changed: boolean } }, consumedReferenceIds: nodeId[], viewTarget: { kind: 'sketches' | 'report' | 'questions', nodeIds: nodeId[] } | null }.
+    // Models are GrillSession models with ideaNodeId, sketches[].nodeId, research[].nodeId/reportNodeId, and usable boardSketches/boardReports; question ids already are node ids; previous is null on the first render.
+    // context: { addedReferenceIds: iterable of node ids, idle: boolean }; reasons: question-status, research-status, sketch-added, sketch-revised, report-added, user-reference; inputs are never mutated.
+    const GrillChanges = (() => {
+      function between(previous, current, context = {}) {
+        const highlights = {}, collapsedQuestions = [], research = {}, consumedReferenceIds = [];
+        const firstRender = previous === null;
+        const previousQuestions = new Map();
+        for (const q of previous ? previous.questions : []) if (!previousQuestions.has(q.id)) previousQuestions.set(q.id, q.status);
+        const previousResearch = new Map((previous ? previous.research : []).map(note => [note.id, note.status]));
+        const previousSketches = new Map((previous ? previous.boardSketches : []).map(sketch => [sketch.id, sketch.rev]));
+        const previousReports = new Set((previous ? previous.boardReports : []).map(note => note.id));
+        const newAsking = [], newSketches = [], newReports = [];
+        function highlight(id, reason) {
+          if (!Object.prototype.hasOwnProperty.call(highlights, id)) Object.defineProperty(highlights, id, { value: [], enumerable: true });
+          if (!highlights[id].includes(reason)) highlights[id].push(reason);
+        }
+        const seenQuestions = new Set();
+        for (const q of current.questions) {
+          if (seenQuestions.has(q.id)) continue;
+          seenQuestions.add(q.id);
+          const changed = previousQuestions.get(q.id) !== q.status;
+          if (changed && q.status === 'settled') collapsedQuestions.push(q.id);
+          if (!firstRender && changed) {
+            highlight(q.id, 'question-status');
+            if (q.status === 'asking') newAsking.push(q.id);
+          }
+        }
+        for (const note of current.research) {
+          Object.defineProperty(research, note.id, { value: {
+            previousStatus: previousResearch.get(note.id) ?? null,
+            changed: previousResearch.get(note.id) !== note.status
+          }, enumerable: true, configurable: true });
+        }
+        for (const note of current.boardResearch) if (research[note.id].changed) highlight(note.nodeId, 'research-status');
+        for (const sketch of current.boardSketches) {
+          if (firstRender) continue;
+          if (!previousSketches.has(sketch.id)) {
+            highlight(sketch.nodeId, 'sketch-added'); newSketches.push(sketch.nodeId);
+          } else if (sketch.rev > previousSketches.get(sketch.id)) highlight(sketch.nodeId, 'sketch-revised');
+        }
+        for (const note of current.boardReports) {
+          if (!firstRender && !previousReports.has(note.id)) {
+            highlight(note.reportNodeId, 'report-added'); newReports.push(note);
+          }
+        }
+        const addedReferenceIds = new Set(context.addedReferenceIds || []);
+        for (const ref of current.boardRefs) if (addedReferenceIds.has(ref.nodeId)) {
+          highlight(ref.nodeId, 'user-reference'); consumedReferenceIds.push(ref.nodeId);
+        }
+        for (const ref of current.optionPictures) if (addedReferenceIds.has(ref.nodeId)) {
+          if (seenQuestions.has(ref.parsedTarget.questionId)) highlight(ref.parsedTarget.questionId, 'user-reference');
+          consumedReferenceIds.push(ref.nodeId);
+        }
+        let viewTarget = null;
+        if (!firstRender && context.idle) {
+          if (newSketches.length) viewTarget = { kind: 'sketches', nodeIds: [current.ideaNodeId].concat(newSketches) };
+          else if (newReports.length) {
+            const note = newReports[0], target = note.parsedTarget.questionId;
+            viewTarget = { kind: 'report', nodeIds: [Object.prototype.hasOwnProperty.call(current.questionsById, target) ? target : current.ideaNodeId, note.reportNodeId] };
+          } else if (newAsking.length) viewTarget = { kind: 'questions', nodeIds: current.questionsByStatus.asking.map(q => q.id) };
+        }
+        return { highlights, collapsedQuestions, research, consumedReferenceIds, viewTarget };
+      }
+      return { between };
+    })();
   </script>
   <script>
     // UI labels, including Markdown headings.
@@ -971,8 +1035,9 @@
 
     // Reports share ordinary node dragging, sizing, and safe research source links.
     function reportButton(note) { return button(currentLabels.readReport, currentLabels.readReport, () => openReader(note.id), 'read-report'); }
-    function reportCard(note, stacked) {
+    function reportCard(note, stacked, changes) {
       const card = element('article', 'report-card' + (stacked ? ' stacked' : '')); card.tabIndex = 0;
+      if (Object.prototype.hasOwnProperty.call(changes.highlights, note.reportNodeId)) card.classList.add('highlight');
       if (stacked) card.append(element('span', 'caption report-meta', currentLabels.report + ' · ' + interpolate(currentLabels.sourceCount, { count: note.sources.length })));
       else card.append(element('span', 'caption', currentLabels.report));
       card.append(element('h3', '', note.topic));
@@ -1181,8 +1246,6 @@
     let panelWidth = readPanelWidth();
     const sketchNodes = new Map();
     let enlargedSketch = null;
-    let previousSketchRevisions = new Map();
-    let previousReports = new Set();
     const researchSteps = new Map();
     let stepViews = new Map();
     let stepsTimer = null;
@@ -1204,8 +1267,7 @@
       }
     });
     let currentLabels = sessionLabels({ lang: '', labels: {} });
-    let previousStatuses = new Map();
-    let previousResearchStatuses = new Map();
+    let previousSession = null;
     let lastInteraction = -Infinity;
     let cardNodes = new Map();
     let nodeRecords = new Map();
@@ -1341,8 +1403,9 @@
       const number = GrillSession.questionNumber(q.id);
       return number ? labels.qPrefix + number : q.id.toUpperCase();
     }
-    function questionCard(q, labels, questionsById) {
+    function questionCard(q, labels, questionsById, changes) {
       const card = element('article', 'question-card ' + q.status);
+      if (Object.prototype.hasOwnProperty.call(changes.highlights, q.id)) card.classList.add('highlight');
       const pending = q.pendingItem;
       const editable = serverMode && q.status === 'asking' && !pending;
       const interactive = editable || !!pending;
@@ -1471,10 +1534,10 @@
         ids: secondary.map(id => questionLabel(questionsById[id], labels)).join(', ')
       })));
       card.append(farLabel((q.status === 'settled' ? '✓ ' : '') + q.title));
-      appendResearchChips(body, q, q.research.filter(note => !currentSession.researchByStatus.done.includes(note) || !safeSource(note.report)));
+      appendResearchChips(body, q, q.research.filter(note => !currentSession.researchByStatus.done.includes(note) || !safeSource(note.report)), changes);
       return card;
     }
-    function appendResearchChips(card, q, notes) {
+    function appendResearchChips(card, q, notes, changes) {
       if (!notes.length) return;
       const chips = element('div', 'research-chips'); const panels = element('div');
       for (const note of notes) {
@@ -1491,7 +1554,7 @@
         chip.setAttribute('aria-expanded', String(!panel.hidden));
         const dot = element('span', 'research-dot ' + note.status); dot.setAttribute('aria-hidden', 'true');
         chip.append(dot, element('span', 'research-chip-label', note.topic));
-        if (previousResearchStatuses.get(note.id) !== note.status) chip.classList.add('highlight');
+        if (changes.research[note.id].changed) chip.classList.add('highlight');
         const group = element('div', 'research-chip-group ' + note.status); group.append(chip);
         if (note.status === 'running') bindSteps(group, note.id, true);
         chips.append(group); panels.append(panel);
@@ -1747,7 +1810,7 @@
       if (surface.tagName === 'IMG') surface.alt = sketch.title;
     }
     // Canvas sketch metadata updates leave unchanged embedded frames mounted.
-    function updateSketchNode(sketch, changed) {
+    function updateSketchNode(sketch, changes) {
       let entry = sketchNodes.get(sketch.id);
       if (!entry) {
         const node = element('article', 'sketch-card'); node.tabIndex = 0;
@@ -1771,7 +1834,7 @@
       entry.caption.textContent = currentLabels.sketch; entry.title.textContent = sketch.title;
       entry.title.title = sketch.title; entry.farTitle.textContent = sketch.title;
       entry.note.textContent = sketch.note; entry.note.hidden = !sketch.note;
-      if (changed) {
+      if (Object.prototype.hasOwnProperty.call(changes.highlights, sketch.nodeId)) {
         entry.node.classList.remove('highlight'); void entry.node.offsetWidth; entry.node.classList.add('highlight');
       }
       registerNode(GrillSession.nodeId('sketch', sketch.id), entry.node, { kind: 'sketch', sketch });
@@ -1844,6 +1907,17 @@
       const radioFocus = focused && focused.matches('[data-answer-option]') ? { id: focused.closest('.question-card').dataset.questionId, option: focused.dataset.answerOption } : null;
       const focusId = focused && focused.closest('.node') && focused.closest('.node').dataset.nodeId;
       currentSession = GrillSession.model(session, user, { serverMode, baseUrl: sessionUrl });
+      // Supply renderer-ready destinations and canonical ids missing from the session model.
+      currentSession.ideaNodeId = ideaId;
+      for (const sketch of currentSession.sketches) sketch.nodeId = GrillSession.nodeId('sketch', sketch.id);
+      for (const note of currentSession.research) {
+        note.nodeId = GrillSession.nodeId('research', note.id); note.reportNodeId = GrillSession.nodeId('report', note.id);
+      }
+      currentSession.boardSketches = usableSketches();
+      currentSession.boardReports = currentSession.researchByStatus.done.filter(note => safeSource(note.report));
+      const changes = GrillChanges.between(previousSession, currentSession, { addedReferenceIds: pendingHighlights, idle: Date.now() - lastInteraction >= 10000 });
+      previousSession = currentSession;
+      for (const id of changes.consumedReferenceIds) pendingHighlights.delete(id);
       currentUserRefs = currentSession.userRefs;
       currentLabels = sessionLabels(currentSession);
       const asking = new Set(currentSession.questionsByStatus.asking.map(q => q.id));
@@ -1866,10 +1940,8 @@
       const dot = element('span', 'live-dot changed'); dot.setAttribute('role', 'img'); dot.setAttribute('aria-label', labels.live); progress.append(dot);
       header.replaceChildren(titleLine, element('p', 'idea-text', data.idea), progress);
       renderSpec(data, labels); spec.scrollTop = scrollTop;
-      const changedSketches = new Set(usableSketches().filter(sketch => !firstRender &&
-        (!previousSketchRevisions.has(sketch.id) || sketch.rev > previousSketchRevisions.get(sketch.id))).map(sketch => sketch.id));
-      const newSketches = usableSketches().filter(sketch => !firstRender && !previousSketchRevisions.has(sketch.id)).map(sketch => GrillSession.nodeId('sketch', sketch.id));
-      previousSketchRevisions = new Map(usableSketches().map(sketch => [sketch.id, sketch.rev]));
+      const newSketches = changes.viewTarget && changes.viewTarget.kind === 'sketches' ? changes.viewTarget.nodeIds.slice(1) : [];
+      const newReports = changes.viewTarget && changes.viewTarget.kind === 'report' ? data.boardReports.filter(note => note.reportNodeId === changes.viewTarget.nodeIds[1]).slice(0, 1) : [];
       renderToolbar(); updateSpec();
       world.setAttribute('role', 'tree'); world.setAttribute('aria-label', data.title || labels.idea);
       hoveredQuestion = '';
@@ -1892,49 +1964,31 @@
       idea.append(farLabel(data.title));
       idea.setAttribute('role', 'treeitem'); idea.setAttribute('aria-level', '1');
       registerNode(ideaId, idea, { kind: 'idea' });
-      const newAsking = [];
-      const nextStatuses = new Map();
+
       for (const q of data.questions) {
         if (cardNodes.has(q.id)) continue;
-        if (q.status === 'settled' && previousStatuses.get(q.id) !== 'settled') expandedCards.delete(q.id);
-        const card = questionCard(q, labels, questionsById);
-        const changed = previousStatuses.get(q.id) !== q.status;
-        if (!firstRender && changed) card.classList.add('highlight');
-        if (!firstRender && changed && q.status === 'asking') newAsking.push(q.id);
+        if (changes.collapsedQuestions.includes(q.id)) expandedCards.delete(q.id);
+        const card = questionCard(q, labels, questionsById, changes);
         registerNode(q.id, card, { kind: 'question', validDependencies: q.validDependencies });
-        cardNodes.set(q.id, card); nextStatuses.set(q.id, q.status);
+        cardNodes.set(q.id, card);
       }
-      previousStatuses = nextStatuses;
       for (const ref of data.boardRefs) {
         const id = ref.nodeId;
         const card = referenceCard(ref);
-        if (pendingHighlights.has(ref.nodeId)) { card.classList.add('highlight'); pendingHighlights.delete(ref.nodeId); }
+        if (Object.prototype.hasOwnProperty.call(changes.highlights, ref.nodeId)) card.classList.add('highlight');
         registerNode(id, card, { kind: 'reference', anchorId: ref.anchorId, parsedTarget: ref.parsedTarget, ref });
       }
-      for (const ref of data.optionPictures) {
-        if (pendingHighlights.has(ref.nodeId)) {
-          const target = cardNodes.get(ref.parsedTarget.questionId);
-          if (target) target.classList.add('highlight');
-          pendingHighlights.delete(ref.nodeId);
-        }
-      }
-      const nextResearchStatuses = new Map();
-      for (const note of data.research) nextResearchStatuses.set(note.id, note.status);
       for (const note of data.boardResearch) {
         const card = researchCard(note);
-        if (previousResearchStatuses.get(note.id) !== note.status) card.classList.add('highlight');
+        if (Object.prototype.hasOwnProperty.call(changes.highlights, note.nodeId)) card.classList.add('highlight');
         registerNode(GrillSession.nodeId('research', note.id), card, { kind: 'research', parsedTarget: note.parsedTarget });
       }
-      previousResearchStatuses = nextResearchStatuses;
-      const reports = data.researchByStatus.done.filter(note => safeSource(note.report));
-      const newReports = reports.filter(note => !firstRender && !previousReports.has(note.id));
+      const reports = data.boardReports;
       for (const note of reports) {
-        const card = reportCard(note, Object.prototype.hasOwnProperty.call(questionsById, note.parsedTarget.questionId));
-        if (newReports.some(added => added.id === note.id)) card.classList.add('highlight');
+        const card = reportCard(note, Object.prototype.hasOwnProperty.call(questionsById, note.parsedTarget.questionId), changes);
         registerNode(GrillSession.nodeId('report', note.id), card, { kind: 'report', parsedTarget: note.parsedTarget, noteId: note.id, note });
       }
-      previousReports = new Set(reports.map(note => note.id));
-      for (const sketch of usableSketches()) updateSketchNode(sketch, changedSketches.has(sketch.id));
+      for (const sketch of data.boardSketches) updateSketchNode(sketch, changes);
       for (const editor of world.querySelectorAll('.answer-editor')) growAnswer(editor);
       saveNodeSizes(); measureAndLayout(); selectQuestion(selectedQuestion);
       if (focusId && nodeRecords.has(focusId)) {
@@ -1948,11 +2002,10 @@
       renderRoundBar();
       syncResearchSteps();
       if (firstRender) focusView(false);
-      else if (Date.now() - lastInteraction >= 10000) {
-        // A sketch that just entered the board is shown with the idea it hangs from; otherwise the view follows the new questions.
-        if (newSketches.length) focusView(true, [ideaId].concat(newSketches));
-        else if (newReports.length) focusView(true, [Object.prototype.hasOwnProperty.call(questionsById, newReports[0].parsedTarget.questionId) ? newReports[0].parsedTarget.questionId : ideaId, GrillSession.nodeId('report', newReports[0].id)]);
-        else if (newAsking.length) focusView(true);
+      else if (changes.viewTarget) {
+        if (changes.viewTarget.kind === 'sketches') focusView(true, [ideaId].concat(newSketches));
+        else if (changes.viewTarget.kind === 'report') focusView(true, [Object.prototype.hasOwnProperty.call(questionsById, newReports[0].parsedTarget.questionId) ? newReports[0].parsedTarget.questionId : ideaId, GrillSession.nodeId('report', newReports[0].id)]);
+        else if (changes.viewTarget.kind === 'questions') focusView(true);
       }
     }
     function registerNode(id, node, metadata) {
