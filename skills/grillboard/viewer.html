@@ -1930,7 +1930,7 @@
     panelResize.addEventListener('pointermove', event => {
       if (!panelDrag || panelDrag.id !== event.pointerId) return;
       panelWidth = boundedPanelWidth(panelDrag.width + panelDrag.x - event.clientX);
-      applyPanelWidth();
+      applyPanelWidth(); updateFloatingControls();
     });
     function finishPanelResize(event) {
       if (!panelDrag || panelDrag.id !== event.pointerId) return;
@@ -2632,8 +2632,11 @@
         roundBar.style.left = '50%'; roundBar.style.bottom = (bottom + toolbar.getBoundingClientRect().height + 8) + 'px';
       } else {
         const right = specCollapsed ? window.innerWidth : specPanel.getBoundingClientRect().left;
-        const left = toolbar.getBoundingClientRect().right + 12;
-        roundBar.style.left = ((left + right) / 2) + 'px'; roundBar.style.bottom = '16px';
+        const toolbarBox = toolbar.getBoundingClientRect();
+        const besideToolbar = right - toolbarBox.right - 28 >= 200;
+        const left = besideToolbar ? toolbarBox.right + 12 : 16;
+        roundBar.style.left = ((left + right) / 2) + 'px';
+        roundBar.style.bottom = (besideToolbar ? 16 : window.innerHeight - toolbarBox.top + 8) + 'px';
         roundBar.style.maxWidth = Math.max(200, right - left - 16) + 'px';
       }
       if (window.innerWidth < 900) roundBar.style.maxWidth = '';
