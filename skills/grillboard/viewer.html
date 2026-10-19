@@ -414,7 +414,7 @@
     // parseNodeId(nodeId) -> { kind, id }, reversing nodeId; unprefixed ids are questions and @idea is the idea with id ''.
     // object(value) -> non-array object, otherwise {}; shared by page state readers.
     // string(value) -> string for strings/numbers/booleans, otherwise ''; shared by page text readers.
-    // array(value) -> array, otherwise []; shared by page state readers.
+    // array(value) -> array with omitted entries skipped, otherwise []; shared by page state readers.
     // singleWebUrl(value) -> trimmed complete HTTP(S) URL, otherwise ''; shared by research, Markdown and pasted links.
     // safeSource(value, baseUrl) -> trimmed relative or HTTP(S) destination, otherwise ''; default baseUrl is https://grillboard.invalid/.
     // isPicture(ref) -> true for image kind or PNG/JPEG/GIF/WebP/SVG extension (ignoring query/fragment).
@@ -422,7 +422,7 @@
       // Normalize optional and malformed fields at the boundary.
       function object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; }
       function string(value) { return typeof value === 'string' ? value : typeof value === 'number' || typeof value === 'boolean' ? String(value) : ''; }
-      function array(value) { return Array.isArray(value) ? value : []; }
+      function array(value) { return Array.isArray(value) ? value.filter(() => true) : []; }
       function questionStatus(value) { return ['settled', 'asking', 'researching', 'waiting'].includes(value) ? value : 'waiting'; }
       function normalizeSession(value) {
         const source = object(value);
