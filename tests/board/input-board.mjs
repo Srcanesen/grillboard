@@ -73,6 +73,7 @@ export async function inputBrowser(profile, children) {
       }));
       return values.filter(value => value !== undefined);
     },
+    async type(text) { await send('Input.insertText', { text }); },
     async key(key, shift = false) {
       const windowsVirtualKeyCode = { Tab: 9, Escape: 27, Enter: 13 }[key];
       await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key, windowsVirtualKeyCode, modifiers: shift ? 8 : 0, text: key === 'Enter' ? '\r' : undefined });

@@ -17,7 +17,8 @@ test('unrelated saves do not reload mounted option sketches and only changed con
     for (const file of ['option-a.html', 'option-b.html']) await writeFile(path.join(root, file), '<html><body>Initial sketch</body></html>');
     await page.evaluate(`window.sketchLoads = { a: 0, b: 0, overlay: 0 };
       document.addEventListener('load', event => {
-        if (event.target.tagName !== 'IFRAME') return;
+        // Count sketch documents, excluding the iframe's initial empty document.
+        if (event.target.tagName !== 'IFRAME' || !event.target.srcdoc || event.target.contentDocument?.URL === 'about:blank') return;
         const option = event.target.closest('[data-answer-option]');
         if (option) sketchLoads[option.dataset.answerOption]++;
         else if (event.target.closest('#lightbox')) sketchLoads.overlay++;

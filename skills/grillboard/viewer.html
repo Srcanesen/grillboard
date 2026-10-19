@@ -1875,14 +1875,13 @@
     }
     reader.addEventListener('click', event => { if (event.target === reader) closeReader(); });
     lightbox.addEventListener('click', event => { if (!enlargedSketch || event.target === lightbox) closeLightbox(); });
-    // Sandboxed frames cannot forward keys, including sketches loaded directly from disk.
-    // Keep keyboard focus in the host dialog while the sketch remains mouse-readable.
+    // Opaque frames (including direct-file sketches) cannot forward keys to the dialog.
     window.addEventListener('blur', () => {
       setTimeout(() => {
-        if (enlargedSketch && document.activeElement === enlargedSketch.surface) lightbox.querySelector('button').focus({ preventScroll: true });
+        if (enlargedSketch && document.activeElement === enlargedSketch.surface && !enlargedSketch.surface.contentDocument) lightbox.querySelector('button').focus({ preventScroll: true });
       }, 0);
     });
-    window.addEventListener('keydown', event => {
+    function dialogKeydown(event) {
       const dialog = !lightbox.hidden ? lightbox : !reader.hidden ? reader : null;
       if (!dialog || (event.key !== 'Tab' && event.key !== 'Escape')) return;
       event.preventDefault(); event.stopPropagation();
@@ -1892,7 +1891,8 @@
       const index = controls.indexOf(document.activeElement);
       const next = index < 0 ? (event.shiftKey ? controls.length - 1 : 0) : (index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
       if (controls[next]) controls[next].focus({ preventScroll: true });
-    }, true);
+    }
+    window.addEventListener('keydown', dialogKeydown, true);
 
     // Nodes and the enlarged overlay share safe, revision-aware sketch frames.
     function usableSketches() { return currentSession ? currentSession.boardSketches : []; }
@@ -1911,7 +1911,11 @@
             if (surface.sketchRequest !== request) return;
             const base = '<base href="' + url.replace(/&/g, '&amp;') + '">';
             const document = /<head[^>]*>/i.test(text) ? text.replace(/<head[^>]*>/i, match => match + base) : base + text;
-            if (surface.srcdoc !== document) surface.srcdoc = document;
+            if (surface.srcdoc !== document) {
+              // Permit host keyboard listeners on fetched documents, keeping sketch scripts disabled.
+              surface.setAttribute('sandbox', 'allow-same-origin');
+              surface.srcdoc = document;
+            }
           })
           .catch(() => { if (surface.sketchRequest === request && surface.src !== url) surface.src = url; });
       } else surface.src = url;
@@ -1922,6 +1926,9 @@
       const surface = element(html ? 'iframe' : 'img', 'sketch-surface');
       if (html) {
         surface.setAttribute('sandbox', '');
+        surface.addEventListener('load', () => {
+          if (surface.contentDocument) surface.contentDocument.addEventListener('keydown', dialogKeydown, true);
+        });
         surface.setAttribute('referrerpolicy', 'no-referrer');
         surface.setAttribute('loading', 'eager');
       }

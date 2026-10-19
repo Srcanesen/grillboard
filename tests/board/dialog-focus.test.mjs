@@ -6,12 +6,12 @@ import { pathToFileURL } from 'node:url';
 import { browserTest as test, serve, stop, until } from './headless-board.mjs';
 import { inputBrowser } from './input-board.mjs';
 
-async function withDialog(protocol, check) {
+async function withDialog(protocol, check, sketchHtml = '<html><body><button style="position:fixed;inset:0;width:100%;height:100%">Sketch button</button></body></html>') {
   const root = await mkdtemp(path.join(tmpdir(), 'grill-dialog-'));
   const children = [];
   try {
     await copyFile(new URL('../../skills/grillboard/viewer.html', import.meta.url), path.join(root, 'index.html'));
-    await writeFile(path.join(root, 'sketch.html'), '<html><body><button style="position:fixed;inset:0;width:100%;height:100%">Sketch button</button></body></html>');
+    await writeFile(path.join(root, 'sketch.html'), sketchHtml);
     await writeFile(path.join(root, 'report.md'), '# Storage\n\nReport body.');
     await writeFile(path.join(root, 'image.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="red"/></svg>');
     await writeFile(path.join(root, 'session.js'), 'window.__GRILL__ = ' + JSON.stringify({
@@ -30,7 +30,7 @@ async function withDialog(protocol, check) {
     await until(async () => (await page.frameValues('document.body.textContent')).filter(text => text === 'Sketch button').length === 2, 'sandbox sketches');
     await until(async () => {
       await page.click('#lightbox iframe');
-      const focusedInside = (await page.frameValues('document.activeElement.tagName')).includes('BUTTON');
+      const focusedInside = (await page.frameValues('document.activeElement.tagName')).some(tag => tag === 'BUTTON' || tag === 'INPUT');
       const focusedInHost = await page.evaluate('sketchReceivedFocus && lightbox.contains(document.activeElement) && document.activeElement.tagName !== "IFRAME"');
       return focusedInside || focusedInHost;
     }, 'sketch received focus from the click');
@@ -40,6 +40,17 @@ async function withDialog(protocol, check) {
     await rm(root, { recursive: true, force: true });
   }
 }
+
+test('http enlarged sketch accepts typed input and Escape still closes it', async () => {
+  await withDialog('http', async page => {
+    await page.type('hello');
+    assert.equal((await page.frameValues('document.querySelector("input")?.value')).filter(value => value === 'hello').length, 1);
+    assert.deepEqual(await page.frameValues('window.sketchScriptRan === true'), [false, false], 'Sketch scripts remain disabled');
+    await page.key('Escape');
+    await until(() => page.evaluate('lightbox.hidden'), 'Escape closes after typing');
+    assert.equal(await page.evaluate('document.activeElement === document.querySelector(".sketch-card")'), true);
+  }, '<html><head><script>window.sketchScriptRan = true;</script></head><body>Sketch button<input style="position:fixed;inset:0;width:100%;height:100%"></body></html>');
+});
 
 for (const protocol of ['http', 'file']) {
   test(protocol + ' sketch Escape closes from inside its sandbox frame and restores its opener', async () => {
