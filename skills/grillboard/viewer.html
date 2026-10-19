@@ -729,10 +729,17 @@
           siblingGap = LAYOUT.lrGapY; levelGap = LAYOUT.lrGapX;
           for (const item of clusters) { item.span = item.height; item.cardSpan = item.cardHeight; item.levelSize = item.width; }
         }
-        function pack(id, depth) {
-          const item = items.get(id); item.depth = depth;
-          if (!levels[depth]) levels[depth] = []; levels[depth].push(item);
-          const children = item.children.map(child => pack(child, depth + 1));
+        const pending = [{ id: idea.id, depth: 0, ready: false }], packed = new Map();
+        while (pending.length) {
+          const { id, depth, ready } = pending.pop(), item = items.get(id);
+          if (!ready) {
+            item.depth = depth;
+            if (!levels[depth]) levels[depth] = []; levels[depth].push(item);
+            pending.push({ id, depth, ready: true });
+            for (let index = item.children.length - 1; index >= 0; index--) pending.push({ id: item.children[index], depth: depth + 1, ready: false });
+            continue;
+          }
+          const children = item.children.map(child => packed.get(child));
           const placed = new Map(); let width = 0; const centers = [];
           for (const child of children) {
             centers.push(width + child.center);
@@ -744,9 +751,10 @@
           const left = Math.min(0, x), right = Math.max(width, x + item.span);
           placed.set(id, x);
           for (const [childId, position] of placed) placed.set(childId, position - left);
-          return { placed, width: right - left, center: x - left + item.cardSpan / 2 };
+          for (const child of item.children) packed.delete(child);
+          packed.set(id, { placed, width: right - left, center: x - left + item.cardSpan / 2 });
         }
-        const tree = pack(idea.id, 0);
+        const tree = packed.get(idea.id);
         let y = 0;
         for (const level of levels) {
           if (flow === 'lr') {
