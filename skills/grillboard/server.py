@@ -299,7 +299,7 @@ class BoardHandler(BaseHTTPRequestHandler):
             path = self.path.partition("?")[0]
             if self.is_api():
                 if path == "/api/ping" and self.command == "GET":
-                    self.json_response(200, {"ok": True, "board": 1, "session": str(self.server.root)})
+                    self.json_response(200, {"ok": True, "board": 1, "session": str(self.server.root), "answerRequestIds": True})
                 elif path == "/api/answers" and self.command == "POST":
                     self.add_answers()
                 elif path == "/api/refs" and self.command == "POST":

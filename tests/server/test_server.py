@@ -278,6 +278,12 @@ class EntryPointTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail("Waiter did not acquire its lock")
 
+    def test_ping_advertises_answer_request_id_support(self):
+        status, body = self.request("api/ping")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {
+            "ok": True, "board": 1, "session": str(self.root), "answerRequestIds": True})
+
     def test_post_persists_batch(self):
         status, response = self.post()
         self.assertEqual(status, 200)

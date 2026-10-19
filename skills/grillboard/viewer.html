@@ -1390,6 +1390,7 @@
     let canWrite = false;
     // Undefined until discovered; null pins legacy mode, which cannot prove a port takeover.
     let serverSession;
+    let serverAnswerRequestIds = false;
     let sessionChanged = false;
     let specCollapsed = window.innerWidth < 900;
     let manualOffsets = readOffsets();
@@ -1500,7 +1501,8 @@
       }
       sendingAnswers = true; answerError = ''; refreshAnswerControls();
       try {
-        const result = await apiRequest('api/answers?requestId=' + answerRequest.requestId, 'POST', { items });
+        const path = 'api/answers' + (serverAnswerRequestIds ? '?requestId=' + answerRequest.requestId : '');
+        const result = await apiRequest(path, 'POST', { items });
         await loadFiles();
         const user = GrillSession.object(latestUser);
         if (!GrillSession.array(user.answers).some(batch => batch.id === result.batch.id)) latestUser = { ...user, answers: GrillSession.array(user.answers).concat(result.batch) };
@@ -2991,6 +2993,7 @@
         const identity = typeof data.session === 'string' ? data.session : null;
         if (serverSession !== undefined && identity !== serverSession) { stopSession(); return; }
         serverSession = identity; sessionChanged = false;
+        serverAnswerRequestIds = identity !== null && data.answerRequestIds === true;
         canWrite = !hasSessionParameter;
       } catch (_) { /* Keep the last verified state; writes still carry the pinned session identity. */ }
       finally { clearTimeout(timeout); }
