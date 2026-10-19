@@ -1382,7 +1382,8 @@
     // HTTP reads remain available even when this board cannot write.
     const serverMode = /^https?:$/.test(window.location.protocol);
     let canWrite = false;
-    let serverSession = null;
+    // Undefined until discovered; null pins legacy mode, which cannot prove a port takeover.
+    let serverSession;
     let sessionChanged = false;
     let specCollapsed = window.innerWidth < 900;
     let manualOffsets = readOffsets();
@@ -2950,7 +2951,8 @@
     // Same-origin board API writes always carry the shared contract header.
     async function apiRequest(path, method, body, contentType) {
       if (!canWrite) throw new Error(currentLabels.needServer);
-      const headers = { 'X-Grill-Board': '1', 'X-Grill-Session': encodeURIComponent(serverSession) };
+      const headers = { 'X-Grill-Board': '1' };
+      if (typeof serverSession === 'string') headers['X-Grill-Session'] = encodeURIComponent(serverSession);
       const options = { method, headers, cache: 'no-store', credentials: 'same-origin' };
       if (body !== undefined) {
         headers['Content-Type'] = contentType || 'application/json';
@@ -2970,9 +2972,11 @@
       try {
         const response = await fetch(new URL('api/ping', serverBaseUrl), { cache: 'no-store', credentials: 'same-origin', signal: controller.signal });
         const data = await response.json();
-        const valid = response.ok && data.ok === true && data.board === 1 && typeof data.session === 'string';
-        if (serverSession !== null && (!valid || data.session !== serverSession)) { stopSession(); return; }
-        if (valid) { serverSession = data.session; sessionChanged = false; }
+        const valid = response.ok && data.ok === true && data.board === 1 &&
+          (!Object.prototype.hasOwnProperty.call(data, 'session') || typeof data.session === 'string');
+        const identity = typeof data.session === 'string' ? data.session : null;
+        if (serverSession !== undefined && (!valid || identity !== serverSession)) { stopSession(); return; }
+        if (valid) { serverSession = identity; sessionChanged = false; }
         canWrite = valid && !hasSessionParameter;
       } catch (_) { canWrite = false; }
       finally { clearTimeout(timeout); }
@@ -3052,7 +3056,7 @@
         window[globalName] = undefined;
         const script = element('script');
         const address = new URL(url); address.searchParams.set('t', String(Date.now()));
-        if (serverSession !== null) address.searchParams.set('grill-session', serverSession);
+        if (typeof serverSession === 'string') address.searchParams.set('grill-session', serverSession);
         script.src = address.href;
         let finished = false;
         const timeout = setTimeout(() => finish(null), 3000);
