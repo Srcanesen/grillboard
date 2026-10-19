@@ -197,6 +197,37 @@ class EntryPointTests(unittest.TestCase):
         with response:
             return response.code, json.load(response)
 
+    def request(self, path, method="GET", data=None, headers=None):
+        request = Request(self.url + path, method=method, data=data,
+                          headers={"X-Grill-Board": "1", **(headers or {})})
+        opener = build_opener(ProxyHandler({}))
+        try:
+            response = opener.open(request, timeout=3)
+        except HTTPError as error:
+            response = error
+        with response:
+            return response.code, response.read()
+
+    def test_failed_image_delete_preserves_reference_and_image(self):
+        picture = b"picture data"
+        status, body = self.request("api/refs?name=sample.png", "POST", picture,
+                                    {"Content-Type": "image/png"})
+        self.assertEqual(status, 200)
+        ref = json.loads(body)["ref"]
+        before = (self.root / "user.js").read_bytes()
+        self.root.chmod(0o555)
+        try:
+            self.assertEqual(self.request("api/refs/" + ref["id"], "DELETE")[0], 500)
+            self.assertEqual((self.root / "user.js").read_bytes(), before)
+            self.assertEqual(server.read_user(self.root)["refs"], [ref])
+            self.assertEqual(self.request(ref["src"]), (200, picture))
+        finally:
+            self.root.chmod(0o755)
+        self.assertEqual(self.request("api/refs/" + ref["id"], "DELETE")[0], 200)
+        self.assertEqual(server.read_user(self.root)["refs"], [])
+        self.assertFalse((self.root / ref["src"]).exists())
+        self.assertEqual(self.request(ref["src"])[0], 404)
+
     def waiting(self, process):
         # Observe the actual lock, so the POST cannot outrun waiter startup.
         deadline = time.monotonic() + 3

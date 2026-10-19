@@ -387,6 +387,7 @@ class BoardHandler(BaseHTTPRequestHandler):
             ref = next((item for item in data["refs"] if item["id"] == ref_id), None)
             if ref is None:
                 raise RequestError(404, "Unknown reference")
+            picture_path = None
             if patch is not None:
                 ref.update(patch)
             else:
@@ -397,9 +398,12 @@ class BoardHandler(BaseHTTPRequestHandler):
                             or any(not part or part.startswith(".") for part in src.split("/")[1:])):
                         raise ValueError("Invalid image path")
                     refs = inside(root, root / "refs")
-                    inside(refs, inside(root, root / src)).unlink(missing_ok=True)
+                    picture_path = inside(refs, inside(root, root / src))
                 data["refs"].remove(ref)
             write_user(root, data)
+            # Keep the image while a failed metadata commit still references it.
+            if picture_path is not None:
+                picture_path.unlink(missing_ok=True)
         self.json_response(200, {"ok": True, "ref": ref} if patch is not None else {"ok": True})
 
     def static_file(self, path):
