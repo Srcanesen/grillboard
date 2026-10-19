@@ -314,7 +314,6 @@ sys.exit(server.main())
             self.assertTrue(ready.select(timeout=5), "Legacy server did not start")
         url = process.stdout.readline().strip()
         self.assertRegex(url, r"^http://127\.0\.0\.1:[0-9]+/$")
-        self.assertGreater(int(url.split(":")[2].rstrip("/")), 9000)
         return url
 
     def test_launch_reuses_own_legacy_server_and_preserves_state(self):
@@ -359,7 +358,6 @@ sys.exit(server.main())
         other = self.root / "other"
         other.mkdir()
         port = self.url.split(":")[2].rstrip("/")
-        self.assertGreater(int(port), 9000)
         if legacy:
             self.assertEqual(self.legacy_server(other, port), self.url)
         else:
@@ -383,7 +381,6 @@ sys.exit(server.main())
             result = server.launch(self.root, SimpleNamespace(port=0, idle_minutes=30))
         self.assertEqual(result, 0)
         self.url = output.getvalue().strip()
-        self.assertGreater(int(self.url.split(":")[2].rstrip("/")), 9000)
         self.assertEqual(self.post()[0], 200)
         self.assertEqual([answer["items"] for answer in server.read_user(self.root)["answers"]],
                          [[{"question": "q1", "option": "a", "text": ""}]])

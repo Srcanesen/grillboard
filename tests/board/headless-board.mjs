@@ -33,17 +33,15 @@ export async function stop(child) {
   try { await done; } finally { clearTimeout(timer); }
 }
 export async function serve(dir, children) {
-  for (let port = 9200; port < 9300; port++) {
-    const child = spawn('python3', [path.join(skill, 'server.py'), dir, '--serve', '--port', String(port)]);
-    children.push(child);
-    let output = '', errors = '';
-    child.stdout.on('data', bytes => output += bytes);
-    child.stderr.on('data', bytes => errors += bytes);
-    await until(() => output.includes('http://') || child.exitCode !== null, 'server startup');
-    if (output.includes('http://')) return `http://127.0.0.1:${port}/`;
-    assert.match(errors, /address already in use/i, 'Server failed to start: ' + errors);
-  }
-  throw new Error('No free board test port');
+  const child = spawn('python3', [path.join(skill, 'server.py'), dir, '--serve', '--port', '0']);
+  children.push(child);
+  let output = '', errors = '';
+  child.stdout.on('data', bytes => output += bytes);
+  child.stderr.on('data', bytes => errors += bytes);
+  await until(() => output.includes('\n') || child.exitCode !== null, 'server startup');
+  const url = output.trim();
+  assert.match(url, /^http:\/\/127\.0\.0\.1:[0-9]+\/$/, 'Server failed to start: ' + errors);
+  return url;
 }
 export async function browser(profile, children) {
   const child = spawn(chromeExecutable, ['--headless=new', '--remote-debugging-pipe', '--no-first-run',
