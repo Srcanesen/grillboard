@@ -22,18 +22,14 @@ async function withDialog(protocol, check, sketchHtml = '<html><body><button sty
     const page = await inputBrowser(path.join(root, 'chrome-profile'), children);
     await page.go(url);
     await until(() => page.evaluate('typeof currentSession !== "undefined" && !!currentSession'), 'board render');
-    await page.evaluate(`window.sketchReceivedFocus = false;
-      window.addEventListener('blur', () => {
-        if (document.activeElement === enlargedSketch?.surface) sketchReceivedFocus = true;
-      }, true);
-      document.querySelector('.sketch-card').focus(); openEnlargedSketch('k1');`);
+    await page.evaluate(`document.querySelector('.sketch-card').focus(); openEnlargedSketch('k1');`);
     await until(async () => (await page.frameValues('document.body.textContent')).filter(text => text === 'Sketch button').length === 2, 'sandbox sketches');
     await until(async () => {
       await page.click('#lightbox iframe');
-      const focusedInside = (await page.frameValues('document.activeElement.tagName')).some(tag => tag === 'BUTTON' || tag === 'INPUT');
-      const focusedInHost = await page.evaluate('sketchReceivedFocus && lightbox.contains(document.activeElement) && document.activeElement.tagName !== "IFRAME"');
-      return focusedInside || focusedInHost;
+      return (await page.frameValues('document.hasFocus() && ["BUTTON", "INPUT"].includes(document.activeElement.tagName)')).some(Boolean);
     }, 'sketch received focus from the click');
+    // Let any queued focus handoff complete before sending the user's next key.
+    await page.evaluate('new Promise(resolve => setTimeout(resolve, 50))');
     await check(page);
   } finally {
     for (const child of children.reverse()) await stop(child);
@@ -41,27 +37,42 @@ async function withDialog(protocol, check, sketchHtml = '<html><body><button sty
   }
 }
 
-test('http enlarged sketch accepts typed input and Escape still closes it', async () => {
-  await withDialog('http', async page => {
-    await page.type('hello');
-    assert.equal((await page.frameValues('document.querySelector("input")?.value')).filter(value => value === 'hello').length, 1);
-    assert.deepEqual(await page.frameValues('window.sketchScriptRan === true'), [false, false], 'Sketch scripts remain disabled');
-    await page.key('Escape');
-    await until(() => page.evaluate('lightbox.hidden'), 'Escape closes after typing');
-    assert.equal(await page.evaluate('document.activeElement === document.querySelector(".sketch-card")'), true);
-  }, '<html><head><script>window.sketchScriptRan = true;</script></head><body>Sketch button<input style="position:fixed;inset:0;width:100%;height:100%"></body></html>');
-});
-
 for (const protocol of ['http', 'file']) {
-  test(protocol + ' sketch Escape closes from inside its sandbox frame and restores its opener', async () => {
+  test(protocol + ' sketch retains all five typed characters without running scripts', async () => {
     await withDialog(protocol, async page => {
-      await page.key('Escape');
-      await until(() => page.evaluate('lightbox.hidden'), 'Escape closes sketch dialog');
-      assert.equal(await page.evaluate('lightbox.hidden'), true);
-      assert.equal(await page.evaluate('document.activeElement === document.querySelector(".sketch-card")'), true);
+      for (const character of 'hello') await page.type(character);
+      assert.deepEqual((await page.frameValues('document.querySelector("input")?.value')).sort(), ['', 'hello']);
+      assert.deepEqual(await page.frameValues('window.sketchScriptRan === true'), [false, false], 'Sketch scripts remain disabled');
+      assert.equal(await page.evaluate('document.activeElement === enlargedSketch.surface'), true);
+    }, '<html><head><script>window.sketchScriptRan = true;</script></head><body>Sketch button<input style="position:fixed;inset:0;width:100%;height:100%"></body></html>');
+  });
+  for (const key of [' ', 'Enter']) test(protocol + ' sketch keeps focus and stays open after ' + (key === ' ' ? 'Space' : key), async () => {
+    await withDialog(protocol, async page => {
+      await page.key(key);
+      assert.equal(await page.evaluate('lightbox.hidden'), false);
+      assert.equal(await page.evaluate('document.activeElement === enlargedSketch.surface'), true);
     });
   });
-  for (const shift of [false, true]) test(protocol + ' sketch ' + (shift ? 'Shift+Tab' : 'Tab') + ' stays in its dialog from inside the frame', async () => {
+  test(protocol + ' sketch supports keyboard scrolling', async () => {
+    await withDialog(protocol, async page => {
+      await page.key('PageDown');
+      await until(async () => (await page.frameValues('scrollY')).some(y => y > 0), 'sketch scrolls down');
+      assert.equal(await page.evaluate('document.activeElement === enlargedSketch.surface'), true);
+    }, '<html><body style="margin:0;min-height:2000px"><button style="position:fixed;inset:0;width:100%;height:100%">Sketch button</button></body></html>');
+  });
+  test(protocol + ' sketch Escape ' + (protocol === 'http' ? 'closes and restores its opener' : 'keeps focus in the opaque sketch'), async () => {
+    await withDialog(protocol, async page => {
+      await page.key('Escape');
+      if (protocol === 'http') {
+        await until(() => page.evaluate('lightbox.hidden'), 'Escape closes sketch dialog');
+        assert.equal(await page.evaluate('document.activeElement === document.querySelector(".sketch-card")'), true);
+      } else {
+        assert.equal(await page.evaluate('lightbox.hidden'), false);
+        assert.equal(await page.evaluate('document.activeElement === enlargedSketch.surface'), true);
+      }
+    });
+  });
+  if (protocol === 'http') for (const shift of [false, true]) test(protocol + ' sketch ' + (shift ? 'Shift+Tab' : 'Tab') + ' stays in its dialog from inside the frame', async () => {
     await withDialog(protocol, async page => {
       for (let step = 0; step < 6; step++) {
         await page.key('Tab', shift);
@@ -69,6 +80,15 @@ for (const protocol of ['http', 'file']) {
         assert.equal(await page.evaluate('lightbox.contains(document.activeElement)'), true, 'Dialog retains focus on step ' + step);
       }
     });
+  });
+  if (protocol === 'file') test('file sketch Tab retains native navigation between its inputs', async () => {
+    await withDialog(protocol, async page => {
+      await page.key('Tab');
+      assert.equal((await page.frameValues('document.activeElement.id')).filter(id => id === 'second').length, 1);
+      assert.equal(await page.evaluate('document.activeElement === enlargedSketch.surface'), true);
+      await page.key('Tab', true);
+      assert.equal((await page.frameValues('document.activeElement.id')).filter(id => id === 'first').length, 1);
+    }, '<html><body>Sketch button<input id="first" style="position:fixed;inset:0;width:100%;height:100%"><input id="second" style="position:absolute;top:220px"></body></html>');
   });
   test(protocol + ' report and image dialogs retain their keyboard controls and opener focus', async () => {
     await withDialog(protocol, async page => {

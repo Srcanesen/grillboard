@@ -75,9 +75,10 @@ export async function inputBrowser(profile, children) {
     },
     async type(text) { await send('Input.insertText', { text }); },
     async key(key, shift = false) {
-      const windowsVirtualKeyCode = { Tab: 9, Escape: 27, Enter: 13 }[key];
-      await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key, windowsVirtualKeyCode, modifiers: shift ? 8 : 0, text: key === 'Enter' ? '\r' : undefined });
-      await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key, windowsVirtualKeyCode, modifiers: shift ? 8 : 0 });
+      const windowsVirtualKeyCode = { Tab: 9, Escape: 27, Enter: 13, ' ': 32, PageDown: 34 }[key];
+      const code = key === ' ' ? 'Space' : key;
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode, modifiers: shift ? 8 : 0, text: key === 'Enter' ? '\r' : key === ' ' ? ' ' : undefined });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode, modifiers: shift ? 8 : 0 });
     },
     async click(selector) {
       const point = await evaluate(`(() => {

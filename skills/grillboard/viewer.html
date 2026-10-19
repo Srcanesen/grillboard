@@ -1875,12 +1875,6 @@
     }
     reader.addEventListener('click', event => { if (event.target === reader) closeReader(); });
     lightbox.addEventListener('click', event => { if (!enlargedSketch || event.target === lightbox) closeLightbox(); });
-    // Opaque frames (including direct-file sketches) cannot forward keys to the dialog.
-    window.addEventListener('blur', () => {
-      setTimeout(() => {
-        if (enlargedSketch && document.activeElement === enlargedSketch.surface && !enlargedSketch.surface.contentDocument) lightbox.querySelector('button').focus({ preventScroll: true });
-      }, 0);
-    });
     function dialogKeydown(event) {
       const dialog = !lightbox.hidden ? lightbox : !reader.hidden ? reader : null;
       if (!dialog || (event.key !== 'Tab' && event.key !== 'Escape')) return;
