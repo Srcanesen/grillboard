@@ -16,6 +16,7 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 from urllib.error import HTTPError
+from urllib.parse import quote
 from urllib.request import ProxyHandler, Request, build_opener
 
 
@@ -227,6 +228,22 @@ class EntryPointTests(unittest.TestCase):
         self.assertEqual(server.read_user(self.root)["refs"], [])
         self.assertFalse((self.root / ref["src"]).exists())
         self.assertEqual(self.request(ref["src"])[0], 404)
+
+    @unittest.skipIf(sys.platform == "win32", "Backslashes are path separators on Windows")
+    def test_encoded_backslash_serves_literal_filename(self):
+        refs = self.root / "refs"
+        refs.mkdir()
+        literal = refs / "plan\\draft.svg"
+        picture = b"<svg><text>Literal filename</text></svg>"
+        literal.write_bytes(picture)
+        path = "refs/" + quote(literal.name, safe="")
+        for nested_exists in (False, True):
+            if nested_exists:
+                nested = refs / "plan"
+                nested.mkdir()
+                (nested / "draft.svg").write_text("<svg><text>Wrong nested file</text></svg>")
+            with self.subTest(nested_exists=nested_exists):
+                self.assertEqual(self.request(path), (200, picture))
 
     def waiting(self, process):
         # Observe the actual lock, so the POST cannot outrun waiter startup.

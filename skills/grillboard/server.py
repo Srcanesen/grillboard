@@ -407,7 +407,9 @@ class BoardHandler(BaseHTTPRequestHandler):
         self.json_response(200, {"ok": True, "ref": ref} if patch is not None else {"ok": True})
 
     def static_file(self, path):
-        decoded = unquote(path).replace("\\", "/")
+        decoded = unquote(path)
+        if os.name == "nt":
+            decoded = decoded.replace("\\", "/")
         segments = decoded.split("/")
         if any(segment.startswith(".") or segment == "server.json" for segment in segments) or "\0" in decoded:
             raise RequestError(404, "File not found")
