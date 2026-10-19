@@ -1937,7 +1937,8 @@
         if (embedded) embedded.frame.replaceWith(next.frame);
         embedded = next;
       }
-      if (checkContent && embedded.checkedSession !== sketchSessionJson) {
+      // Disk documents cannot be compared: preserve their state until the path or revision changes.
+      if (checkContent && location.protocol !== 'file:' && embedded.checkedSession !== sketchSessionJson) {
         embedded.checkedSession = sketchSessionJson;
         loadSketchSurface(embedded.surface, sketchUrl(sketch));
       }
@@ -2058,7 +2059,7 @@
       const radioFocus = focused && focused.matches('[data-answer-option]') ? { id: focused.closest('.question-card').dataset.questionId, option: focused.dataset.answerOption } : null;
       const focusId = focused && focused.closest('.node') && focused.closest('.node').dataset.nodeId;
       currentSession = GrillSession.model(session, user, { serverMode, baseUrl: sessionUrl, imageSources: referenceImageSources });
-      // Variants have no revision field: check their files after a save, preserving unchanged documents.
+      // HTTP variants have no revision field: compare their files after a save.
       sketchSessionJson = JSON.stringify(session);
       const changedData = JSON.stringify(previousSession) !== JSON.stringify(currentSession);
       const changes = GrillChanges.between(previousSession, currentSession, { idle: Date.now() - lastInteraction >= 10000 });
