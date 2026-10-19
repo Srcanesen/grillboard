@@ -56,7 +56,8 @@ export async function browser(profile, children) {
     let index;
     while ((index = buffer.indexOf('\0')) !== -1) {
       const message = JSON.parse(buffer.slice(0, index)); buffer = buffer.slice(index + 1);
-      if (message.method === 'Target.attachedToTarget') call('Runtime.enable', {}, message.params.sessionId);
+      // A frame can detach before its runtime is enabled.
+      if (message.method === 'Target.attachedToTarget') call('Runtime.enable', {}, message.params.sessionId).catch(() => {});
       if (message.method === 'Runtime.executionContextCreated') {
         const context = message.params.context;
         contexts.set(message.sessionId + ':' + context.id, { ...context, sessionId: message.sessionId });
