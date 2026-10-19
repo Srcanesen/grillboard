@@ -1899,7 +1899,7 @@
             if (surface.srcdoc !== document) surface.srcdoc = document;
           })
           .catch(() => { if (surface.sketchRequest === request && surface.src !== url) surface.src = url; });
-      } else if (surface.src !== url) surface.src = url;
+      } else surface.src = url;
     }
     function createSketchFrame(sketch) {
       const url = sketchUrl(sketch);
