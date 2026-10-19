@@ -933,7 +933,7 @@
         warnUnreadable: 'The session file could not be read. Showing the last good state.',
         mdDecisions: 'Decisions', mdArchitecture: 'Architecture', mdOpen: 'Open questions',
         live: 'Live', references: 'References', yours: 'Yours', addNote: 'Add a note',
-        dropHint: 'Drop to add a reference', refAdded: 'Reference added', refFailed: 'Could not add the reference',
+        dropHint: 'Drop to add a reference', refAdded: 'Reference added', refFailed: 'Could not add the reference', noteFailed: 'Could not save the note. Try again.',
         needServer: 'Adding references needs the board server.', badType: 'Only PNG, JPEG, GIF and WebP pictures can be added.',
         fit: 'Fit to screen', zoomIn: 'Zoom in', zoomOut: 'Zoom out', resetLayout: 'Reset layout',
         toggleSpec: 'Show or hide the spec', close: 'Close', openLink: 'Open link', deleteRef: 'Delete reference', mdReferences: 'References',
@@ -963,7 +963,7 @@
         warnUnreadable: 'Oturum dosyası okunamadı. Son geçerli durum gösteriliyor.',
         mdDecisions: 'Kararlar', mdArchitecture: 'Mimari', mdOpen: 'Açık kalan sorular',
         live: 'Canlı', references: 'Referanslar', yours: 'Sizin', addNote: 'Not ekle',
-        dropHint: 'Referans eklemek için bırakın', refAdded: 'Referans eklendi', refFailed: 'Referans eklenemedi',
+        dropHint: 'Referans eklemek için bırakın', refAdded: 'Referans eklendi', refFailed: 'Referans eklenemedi', noteFailed: 'Not kaydedilemedi. Tekrar deneyin.',
         needServer: 'Referans eklemek için pano sunucusu gerekir.', badType: 'Yalnızca PNG, JPEG, GIF ve WebP görselleri eklenebilir.',
         fit: 'Ekrana sığdır', zoomIn: 'Yakınlaştır', zoomOut: 'Uzaklaştır', resetLayout: 'Yerleşimi sıfırla',
         toggleSpec: 'Spec panelini göster veya gizle', close: 'Kapat', openLink: 'Bağlantıyı aç', deleteRef: 'Referansı sil', mdReferences: 'Referanslar',
@@ -1846,12 +1846,14 @@
         if (finished) return;
         finished = true;
         const value = editor.value;
-        editor.replaceWith(note); measureAndLayout();
-        if (!save || value === ref.note) { renderLatest(); return; }
+        if (!save || value === ref.note) { editor.replaceWith(note); measureAndLayout(); renderLatest(); return; }
+        editor.readOnly = true;
         try {
           await apiRequest('api/refs/' + encodeURIComponent(ref.id), 'POST', { note: value });
+          editor.replaceWith(note); measureAndLayout();
           await loadFiles();
-        } catch (error) { toast(currentLabels.refFailed + ': ' + error.message); }
+        } catch (error) { finished = false; toast(currentLabels.noteFailed); }
+        finally { editor.readOnly = false; }
       }
       editor.addEventListener('keydown', event => {
         if (event.key === 'Escape') { event.preventDefault(); finish(false); note.focus({ preventScroll: true }); }
