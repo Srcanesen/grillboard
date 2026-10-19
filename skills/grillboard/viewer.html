@@ -1111,8 +1111,19 @@
       const sources = element('section'); appendResearchContent(sources, { ...note, finding: '' });
       column.append(head, body, sources);
       const close = button('×', currentLabels.close, closeReader);
+      Object.assign(state, { link, sources });
       reader.setAttribute('aria-label', note.topic || currentLabels.report);
       reader.replaceChildren(close, column); reader.hidden = false; close.focus({ preventScroll: true });
+      await refreshReader(note);
+    }
+    async function refreshReader(note) {
+      const state = readerState, { body, link, sources, column } = state;
+      state.note = note;
+      link.href = new URL(safeSource(note.report), sessionUrl).href;
+      column.querySelector('h2').textContent = note.topic;
+      reader.setAttribute('aria-label', note.topic || currentLabels.report);
+      sources.replaceChildren(); appendResearchContent(sources, { ...note, finding: '' }); sources.hidden = false;
+      body.replaceChildren();
       const canRead = serverMode && /^https?:$/.test(window.location.protocol);
       if (canRead) body.textContent = currentLabels.loading;
       else body.append(element('p', 'research-finding', note.finding));
@@ -1121,12 +1132,12 @@
         const response = await fetch(link.href, { cache: 'no-store' });
         if (!response.ok) throw new Error(String(response.status));
         const text = await response.text();
-        if (readerState !== state) return;
+        if (readerState !== state || state.note !== note) return;
         // The header already shows the topic, and a report lists its own sources.
         const blocks = parseMarkdown(text);
         if (blocks[0] && blocks[0].type === 'heading' && blocks[0].level === 1) blocks.shift();
         body.replaceChildren(renderMarkdown(blocks)); sources.hidden = true;
-      } catch (_) { if (readerState === state) body.replaceChildren(element('p', 'research-finding', note.finding)); }
+      } catch (_) { if (readerState === state && state.note === note) body.replaceChildren(element('p', 'research-finding', note.finding)); }
     }
 
     // A pure block parser treats unsupported markup, including HTML, as text.
@@ -2007,7 +2018,11 @@
       const data = currentSession;
       const labels = currentLabels;
       for (const id of researchSteps.keys()) if (!data.researchByStatus.running.some(note => note.id === id)) researchSteps.delete(id);
-      if (readerState && !data.research.some(note => note.id === readerState.id)) closeReader();
+      if (readerState) {
+        const note = data.research.find(note => note.id === readerState.id);
+        if (!note || !safeSource(note.report)) closeReader();
+        else if (JSON.stringify(note) !== JSON.stringify(readerState.note)) refreshReader(note);
+      }
       document.documentElement.lang = labelLanguage(data.lang);
       document.title = data.title || labels.idea;
       waiting.hidden = true; board.hidden = false;
