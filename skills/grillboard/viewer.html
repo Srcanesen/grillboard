@@ -2974,11 +2974,12 @@
         const data = await response.json();
         const valid = response.ok && data.ok === true && data.board === 1 &&
           (!Object.prototype.hasOwnProperty.call(data, 'session') || typeof data.session === 'string');
+        if (!valid) return;
         const identity = typeof data.session === 'string' ? data.session : null;
-        if (serverSession !== undefined && (!valid || identity !== serverSession)) { stopSession(); return; }
-        if (valid) { serverSession = identity; sessionChanged = false; }
-        canWrite = valid && !hasSessionParameter;
-      } catch (_) { canWrite = false; }
+        if (serverSession !== undefined && identity !== serverSession) { stopSession(); return; }
+        serverSession = identity; sessionChanged = false;
+        canWrite = !hasSessionParameter;
+      } catch (_) { /* Keep the last verified state; writes still carry the pinned session identity. */ }
       finally { clearTimeout(timeout); }
     }
     function stopSession() {

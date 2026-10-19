@@ -18,6 +18,8 @@ class ControlledHandler(server.BoardHandler):
             if mode == "hang":
                 time.sleep(30)
                 return
+            if mode == "slow":
+                time.sleep(1.3)
             if mode == "legacy":
                 self.json_response(200, {"ok": True, "board": 1})
                 return
