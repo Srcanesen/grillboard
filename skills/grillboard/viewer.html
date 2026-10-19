@@ -264,6 +264,10 @@
     .warning { bottom: 126px; border: 1px solid var(--amber); border-radius: var(--radius); }
     .drop-hint { bottom: 180px; color: var(--accent); }
     .reference-card { width: 200px; padding: 8px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); z-index: 1; }
+    #reference-add-errors { position: fixed; right: 16px; bottom: 76px; z-index: 8; display: grid; gap: 8px; max-width: min(360px, calc(100vw - 32px)); max-height: 50vh; overflow: auto; }
+    .reference-add-error { padding: 10px 12px; }
+    .reference-add-error p { margin: 0 0 8px; overflow-wrap: anywhere; }
+    .reference-add-error button + button { margin-left: 8px; }
     /* Research notes have their own status colours and retain finding line breaks. */
     .research-card { width: 240px; padding: 10px; background: var(--card); border: 1px solid var(--violet); border-radius: var(--radius); z-index: 1; }
     .research-card.todo { border-style: dashed; color: var(--muted); }
@@ -395,6 +399,7 @@
   <div id="waiting" class="waiting-message floating" role="status"></div>
   <div id="toast" class="toast floating" role="status" hidden></div>
   <div id="drop-hint" class="drop-hint floating" role="status" hidden></div>
+  <div id="reference-add-errors" role="status"></div>
   <div id="lightbox" class="lightbox" role="dialog" aria-modal="true" hidden></div>
   <div id="reader" class="lightbox" role="dialog" aria-modal="true" hidden></div>
   <!-- Pure logic lives in the blocks below: no document, no window, no state shared with the page.
@@ -933,7 +938,7 @@
         warnUnreadable: 'The session file could not be read. Showing the last good state.',
         mdDecisions: 'Decisions', mdArchitecture: 'Architecture', mdOpen: 'Open questions',
         live: 'Live', references: 'References', yours: 'Yours', addNote: 'Add a note',
-        dropHint: 'Drop to add a reference', refAdded: 'Reference added', refFailed: 'Could not add the reference', noteFailed: 'Could not save the note. Try again.',
+        dropHint: 'Drop to add a reference', refAdded: 'Reference added', refFailed: 'Could not add the reference', noteFailed: 'Could not save the note. Try again.', retryReference: 'Retry',
         needServer: 'Adding references needs the board server.', badType: 'Only PNG, JPEG, GIF and WebP pictures can be added.',
         fit: 'Fit to screen', zoomIn: 'Zoom in', zoomOut: 'Zoom out', resetLayout: 'Reset layout',
         toggleSpec: 'Show or hide the spec', close: 'Close', openLink: 'Open link', deleteRef: 'Delete reference', mdReferences: 'References',
@@ -963,7 +968,7 @@
         warnUnreadable: 'Oturum dosyası okunamadı. Son geçerli durum gösteriliyor.',
         mdDecisions: 'Kararlar', mdArchitecture: 'Mimari', mdOpen: 'Açık kalan sorular',
         live: 'Canlı', references: 'Referanslar', yours: 'Sizin', addNote: 'Not ekle',
-        dropHint: 'Referans eklemek için bırakın', refAdded: 'Referans eklendi', refFailed: 'Referans eklenemedi', noteFailed: 'Not kaydedilemedi. Tekrar deneyin.',
+        dropHint: 'Referans eklemek için bırakın', refAdded: 'Referans eklendi', refFailed: 'Referans eklenemedi', noteFailed: 'Not kaydedilemedi. Tekrar deneyin.', retryReference: 'Tekrar dene',
         needServer: 'Referans eklemek için pano sunucusu gerekir.', badType: 'Yalnızca PNG, JPEG, GIF ve WebP görselleri eklenebilir.',
         fit: 'Ekrana sığdır', zoomIn: 'Yakınlaştır', zoomOut: 'Uzaklaştır', resetLayout: 'Yerleşimi sıfırla',
         toggleSpec: 'Spec panelini göster veya gizle', close: 'Kapat', openLink: 'Bağlantıyı aç', deleteRef: 'Referansı sil', mdReferences: 'Referanslar',
@@ -3000,7 +3005,8 @@
       const lines = GrillSession.string(transfer.getData('text/uri-list')).split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
       return lines.map(GrillSession.singleWebUrl).find(Boolean) || GrillSession.singleWebUrl(transfer.getData('text/plain'));
     }
-    async function addReference(file, url, target, position) {
+    async function addReference(file, url, target, position, failure = null) {
+      if (failure) failure.querySelector('.retry-reference').disabled = true;
       try {
         let data;
         if (file) {
@@ -3009,8 +3015,18 @@
           data = await apiRequest('api/refs?' + query, 'POST', file, file.type);
         } else data = await apiRequest('api/refs', 'POST', { url, target });
         if (data.ref && data.ref.id && position) pendingDropPositions.set(GrillSession.nodeId('ref:user', data.ref.id), { x: position.x, y: position.y });
+        if (failure) failure.remove();
         await loadFiles(); toast(currentLabels.refAdded);
-      } catch (error) { toast(currentLabels.refFailed + ': ' + error.message); }
+      } catch (error) {
+        if (!failure) {
+          failure = element('div', 'reference-add-error floating');
+          failure.append(element('p', '', currentLabels.refFailed), element('p', '', file ? file.name : url));
+          failure.append(button(currentLabels.retryReference, currentLabels.retryReference, () => addReference(file, url, target, position, failure), 'retry-reference'));
+          failure.append(button('×', currentLabels.close, () => failure.remove(), 'dismiss-reference'));
+          document.getElementById('reference-add-errors').append(failure);
+        }
+        failure.querySelector('.retry-reference').disabled = false;
+      }
     }
     let dragDepth = 0;
     window.addEventListener('dragenter', event => { event.preventDefault(); dragDepth++; dropHint.textContent = currentLabels.dropHint; dropHint.hidden = false; });
@@ -3026,7 +3042,6 @@
       const transfer = event.dataTransfer; if (!transfer) return;
       const files = Array.from(transfer.files || []), url = files.length ? '' : transferUrl(transfer);
       if (!files.length && !url) return;
-      if (!canWrite) { toast(currentLabels.needServer); return; }
       const target = questionAt(event.clientX, event.clientY), point = worldPoint(event.clientX, event.clientY);
       if (files.length) {
         for (let i = 0; i < files.length; i++) await addReference(files[i], '', target, target ? null : { x: point.x + i * 24, y: point.y + i * 24 });
@@ -3040,7 +3055,6 @@
       const url = files.length ? '' : GrillSession.singleWebUrl(transfer.getData('text/plain'));
       if (!files.length && !url) return;
       event.preventDefault();
-      if (!canWrite) { toast(currentLabels.needServer); return; }
       const target = selectedQuestion;
       if (files.length) { for (const file of files) await addReference(file, '', target, null); }
       else await addReference(null, url, target, null);
