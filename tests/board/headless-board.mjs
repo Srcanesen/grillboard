@@ -3,12 +3,19 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import test from 'node:test';
 
 const skill = fileURLToPath(new URL('../../skills/grillboard/', import.meta.url));
+const chromeExecutable = process.env.CHROME_BIN
+  ? (existsSync(process.env.CHROME_BIN) ? process.env.CHROME_BIN : undefined)
+  : ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'].find(existsSync);
+export const browserTest = (name, check) => test(name, {
+  skip: !chromeExecutable && 'Chrome not found; set CHROME_BIN to an installed Chrome/Chromium executable.'
+}, check);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 export async function until(check, message) {
   const deadline = Date.now() + 6000;
@@ -18,36 +25,28 @@ export async function until(check, message) {
   }
   throw new Error('Timed out: ' + message);
 }
-async function stop(child) {
+export async function stop(child) {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const done = once(child, 'exit');
   child.kill('SIGTERM');
   const timer = setTimeout(() => child.kill('SIGKILL'), 2000);
   try { await done; } finally { clearTimeout(timer); }
 }
-async function serve(dir, children) {
-  let port;
-  for (port = 9200; port < 9300; port++) {
-    const socket = net.createServer();
-    try { await new Promise((resolve, reject) => socket.once('error', reject).listen(port, '127.0.0.1', resolve)); }
-    catch { continue; }
-    await new Promise(resolve => socket.close(resolve)); break;
+export async function serve(dir, children) {
+  for (let port = 9200; port < 9300; port++) {
+    const child = spawn('python3', [path.join(skill, 'server.py'), dir, '--serve', '--port', String(port)]);
+    children.push(child);
+    let output = '', errors = '';
+    child.stdout.on('data', bytes => output += bytes);
+    child.stderr.on('data', bytes => errors += bytes);
+    await until(() => output.includes('http://') || child.exitCode !== null, 'server startup');
+    if (output.includes('http://')) return `http://127.0.0.1:${port}/`;
+    assert.match(errors, /address already in use/i, 'Server failed to start: ' + errors);
   }
-  assert.ok(port < 9300, 'No free board test port');
-  const child = spawn('python3', [path.join(skill, 'server.py'), dir, '--serve', '--port', String(port)]);
-  children.push(child);
-  let output = '';
-  child.stdout.on('data', bytes => output += bytes);
-  await until(() => output.includes('http://'), 'server startup');
-  return `http://127.0.0.1:${port}/`;
+  throw new Error('No free board test port');
 }
-async function browser(profile, children) {
-  const executable = process.env.CHROME_BIN || [
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome'
-  ].find(existsSync);
-  assert.ok(executable, 'Headless Chrome is required (or set CHROME_BIN)');
-  const child = spawn(executable, ['--headless=new', '--remote-debugging-pipe', '--no-first-run',
+export async function browser(profile, children) {
+  const child = spawn(chromeExecutable, ['--headless=new', '--remote-debugging-pipe', '--no-first-run',
     '--no-default-browser-check', '--disable-background-networking', '--disable-component-update',
     '--disable-sync', '--disable-extensions', '--user-data-dir=' + profile, 'about:blank'],
   { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });

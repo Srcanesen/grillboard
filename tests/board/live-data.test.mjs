@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import test from 'node:test';
-import { until, withBoard } from './headless-board.mjs';
+import { browserTest as test, until, withBoard } from './headless-board.mjs';
 
 const question = {
   id: 'q1', title: 'Storage?', status: 'asking',
