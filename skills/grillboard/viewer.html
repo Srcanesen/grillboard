@@ -406,6 +406,7 @@
     // Questions hold pending (boolean), pendingItem (batch item or null), validDependencies (ids), research (notes), optionPictures (option id -> reference); refs hold nodeId; refs/research keep raw target and parsedTarget.
     // boardRefs are usable standalone refs with anchorId (question/idea node id or ''); optionPictures lists the first usable picture per exact option target, agent refs before user refs, excluding waiting questions; boardResearch holds notes without a known question.
     // Groups preserve file order; lookups are objects; options.serverMode: false disables pending; options.baseUrl resolves reference sources (default https://grillboard.invalid/).
+    // options.imageSources is a set of reference sources successfully decoded as images by the page.
     // parseTarget(target) -> { questionId, optionId }, each '' when absent; 'idea' remains questionId 'idea'.
     // hasAnswer(answer) -> true when an option is chosen or text is not blank.
     // ANSWER_TEXT_MAX -> 2000, the maximum answer text length.
@@ -538,6 +539,7 @@
           const src = safeSource(ref.src, options.baseUrl);
           if (!src) continue;
           const usable = { ...ref, src };
+          if (!ref.kind && options.imageSources && options.imageSources.has(src)) usable.kind = 'image';
           const q = Object.prototype.hasOwnProperty.call(questionsById, ref.parsedTarget.questionId) ? questionsById[ref.parsedTarget.questionId] : null;
           const optionTarget = q && q.options.some(option => ref.parsedTarget.optionId === option.id && ref.target === q.id + ':' + option.id);
           if (optionTarget && q.status !== 'waiting' && isPicture(usable) && !Object.prototype.hasOwnProperty.call(q.optionPictures, ref.parsedTarget.optionId)) {
@@ -1269,6 +1271,20 @@
     function safeSource(value) { return GrillSession.safeSource(value, sessionUrl); }
     function fileName(src) { return GrillSession.string(src).split(/[?#]/)[0].split('/').pop() || GrillSession.string(src); }
     function isPicture(ref) { return GrillSession.isPicture(ref); }
+    const referenceImageSources = new Set(), referenceImageProbes = new Set();
+    function detectReferencePictures(data) {
+      for (const ref of data.refs.concat(data.userRefs)) {
+        const src = safeSource(ref.src);
+        if (ref.kind || isPicture(ref) || !GrillSession.singleWebUrl(src) || referenceImageProbes.has(src)) continue;
+        referenceImageProbes.add(src);
+        const image = new Image();
+        image.onload = () => {
+          referenceImageSources.add(src);
+          lastRenderedJson = null; renderLatest();
+        };
+        image.src = src;
+      }
+    }
 
     // Runtime state separates measured geometry, saved positions, and the viewport.
     const warning = document.getElementById('warning');
@@ -2013,7 +2029,7 @@
       const answerFocus = focused && focused.matches('.answer-editor') ? { id: focused.dataset.answerQuestion, start: focused.selectionStart, end: focused.selectionEnd } : null;
       const radioFocus = focused && focused.matches('[data-answer-option]') ? { id: focused.closest('.question-card').dataset.questionId, option: focused.dataset.answerOption } : null;
       const focusId = focused && focused.closest('.node') && focused.closest('.node').dataset.nodeId;
-      currentSession = GrillSession.model(session, user, { serverMode, baseUrl: sessionUrl });
+      currentSession = GrillSession.model(session, user, { serverMode, baseUrl: sessionUrl, imageSources: referenceImageSources });
       // Variants have no revision field in the session contract: a changed session refreshes their files.
       const sketchJson = JSON.stringify(session);
       if (sketchJson !== sketchSessionJson) { sketchSessionJson = sketchJson; variantRevision++; }
@@ -2028,6 +2044,7 @@
       for (const id of unseenQuestions) if (!asking.has(id) || currentSession.questionsById[id].pending) unseenQuestions.delete(id);
       variantObserver.disconnect();
       const data = currentSession;
+      detectReferencePictures(data);
       const labels = currentLabels;
       for (const id of researchSteps.keys()) if (!data.researchByStatus.running.some(note => note.id === id)) researchSteps.delete(id);
       if (readerState) {
