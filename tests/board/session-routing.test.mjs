@@ -6,7 +6,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promi
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 
 const skill = fileURLToPath(new URL('../../skills/grillboard/', import.meta.url));
@@ -321,6 +321,30 @@ test('read-only cards show incoming pending answers and Sent without reloading',
     }
     assert.deepEqual(await answers(root), []);
     assert.deepEqual((await answers(other)).map(batch => batch.items[0].text), ['From the writable board', 'Updated answer', 'From the writable board', 'Updated answer']);
+  } finally {
+    for (const child of children.reverse()) await stop(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('disk boards render without a notice promising a writable board', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'grill-disk-'));
+  const children = [];
+  try {
+    await copyFile(path.join(skill, 'viewer.html'), path.join(root, 'index.html'));
+    await writeFile(path.join(root, 'session.js'), 'window.__GRILL__ = ' + JSON.stringify({
+      version: 1, lang: 'en', title: 'Disk session', idea: 'Read from disk', questions: [{
+        id: 'q1', round: 1, title: 'Storage?', status: 'asking', options: [{ id: 'b', label: 'SQLite' }]
+      }]
+    }) + ';\n');
+    const page = await browser(path.join(root, 'chrome-profile'), children);
+    for (const query of ['', '?session=session.js']) {
+      await page.go(pathToFileURL(path.join(root, 'index.html')).href + query);
+      await until(() => page.evaluate(`document.querySelector('#header h1')?.textContent === 'Disk session'`), 'disk board render');
+      assert.equal(await page.evaluate(`document.querySelector('.read-only-notice')?.textContent || ''`), '');
+      assert.equal(await page.evaluate('roundBar.hidden'), true);
+      assert.equal(await page.evaluate(`document.querySelector('.send-answers')`), null);
+    }
   } finally {
     for (const child of children.reverse()) await stop(child);
     await rm(root, { recursive: true, force: true });

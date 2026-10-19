@@ -2063,7 +2063,7 @@
       progress.append(element('span', '', interpolate(labels.progress, { done: data.questionsByStatus.settled.length, total: data.questions.length })));
       const dot = element('span', 'live-dot changed'); dot.setAttribute('role', 'img'); dot.setAttribute('aria-label', labels.live); progress.append(dot);
       header.replaceChildren(titleLine, element('p', 'idea-text', data.idea), progress);
-      if (!canWrite) header.append(element('p', 'read-only-notice', labels.readOnly));
+      if (serverMode && !canWrite) header.append(element('p', 'read-only-notice', labels.readOnly));
       renderSpec(data, labels); spec.scrollTop = scrollTop;
       renderToolbar(); updateSpec();
       world.setAttribute('role', 'tree'); world.setAttribute('aria-label', data.title || labels.idea);
