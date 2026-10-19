@@ -938,7 +938,7 @@
         warnUnreadable: 'The session file could not be read. Showing the last good state.',
         mdDecisions: 'Decisions', mdArchitecture: 'Architecture', mdOpen: 'Open questions',
         live: 'Live', references: 'References', yours: 'Yours', addNote: 'Add a note',
-        dropHint: 'Drop to add a reference', refAdded: 'Reference added', refFailed: 'Could not add the reference', noteFailed: 'Could not save the note. Try again.', retryReference: 'Retry',
+        dropHint: 'Drop to add a reference', refAdded: 'Reference added', refFailed: 'Could not add the reference', noteFailed: 'Could not save the note. Try again.', noteRetained: 'Reference no longer shown. Your note is kept here.', retryReference: 'Retry',
         needServer: 'Adding references needs the board server.', referenceOffline: 'Could not reach the board server. Try again.', pictureTooLarge: 'This picture is too large. Use a smaller picture.', badType: 'Only PNG, JPEG, GIF and WebP pictures can be added.',
         fit: 'Fit to screen', zoomIn: 'Zoom in', zoomOut: 'Zoom out', resetLayout: 'Reset layout',
         toggleSpec: 'Show or hide the spec', close: 'Close', openLink: 'Open link', deleteRef: 'Delete reference', mdReferences: 'References',
@@ -968,7 +968,7 @@
         warnUnreadable: 'Oturum dosyası okunamadı. Son geçerli durum gösteriliyor.',
         mdDecisions: 'Kararlar', mdArchitecture: 'Mimari', mdOpen: 'Açık kalan sorular',
         live: 'Canlı', references: 'Referanslar', yours: 'Sizin', addNote: 'Not ekle',
-        dropHint: 'Referans eklemek için bırakın', refAdded: 'Referans eklendi', refFailed: 'Referans eklenemedi', noteFailed: 'Not kaydedilemedi. Tekrar deneyin.', retryReference: 'Tekrar dene',
+        dropHint: 'Referans eklemek için bırakın', refAdded: 'Referans eklendi', refFailed: 'Referans eklenemedi', noteFailed: 'Not kaydedilemedi. Tekrar deneyin.', noteRetained: 'Referans artık gösterilmiyor. Notunuz burada saklanıyor.', retryReference: 'Tekrar dene',
         needServer: 'Referans eklemek için pano sunucusu gerekir.', referenceOffline: 'Pano sunucusuna ulaşılamadı. Tekrar deneyin.', pictureTooLarge: 'Bu görsel çok büyük. Daha küçük bir görsel kullanın.', badType: 'Yalnızca PNG, JPEG, GIF ve WebP görselleri eklenebilir.',
         fit: 'Ekrana sığdır', zoomIn: 'Yakınlaştır', zoomOut: 'Uzaklaştır', resetLayout: 'Yerleşimi sıfırla',
         toggleSpec: 'Spec panelini göster veya gizle', close: 'Kapat', openLink: 'Bağlantıyı aç', deleteRef: 'Referansı sil', mdReferences: 'Referanslar',
@@ -1616,6 +1616,7 @@
                 if (variant) showEnlargedSketch(variant); else openLightbox(ref);
               }, 'variant-open'));
               if (ref && ref.user) {
+                row.dataset.noteRef = ref.id;
                 row.append(element('span', 'badge yours', labels.yours));
                 if (canWrite) addReferenceControls(row, ref);
                 else if (ref.note) row.append(element('p', 'ref-note', ref.note));
@@ -1812,6 +1813,7 @@
       const card = element('article', 'reference-card');
       card.tabIndex = 0;
       card.dataset.refId = ref.id;
+      if (ref.user) card.dataset.noteRef = ref.id;
       if (isPicture(ref)) card.append(picture(ref, 'reference-picture'));
       else {
         const url = new URL(ref.src, sessionUrl);
@@ -1852,19 +1854,23 @@
     }
     function editNote(note, ref) {
       const editor = element('textarea', 'note-editor');
-      editor.noteButton = note;
+      editor.noteButton = note; editor.dataset.refId = ref.id; editor.noteSource = ref.name || ref.src;
       editor.value = ref.note; editor.maxLength = 2000; editor.setAttribute('aria-label', currentLabels.addNote);
       note.replaceWith(editor); measureAndLayout(); editor.focus({ preventScroll: true });
       let finished = false;
+      function closeEditor() {
+        const retained = editor.closest('.reference-note-draft');
+        editor.replaceWith(editor.noteButton); if (retained) retained.remove(); measureAndLayout();
+      }
       async function finish(save) {
         if (finished) return;
         finished = true;
         const value = editor.value;
-        if (!save || value === ref.note) { editor.replaceWith(editor.noteButton); measureAndLayout(); renderLatest(); return; }
+        if (!save || value === ref.note) { closeEditor(); renderLatest(); return; }
         editor.readOnly = true;
         try {
           await apiRequest('api/refs/' + encodeURIComponent(ref.id), 'POST', { note: value });
-          editor.replaceWith(editor.noteButton); measureAndLayout();
+          closeEditor();
           await loadFiles();
         } catch (error) { finished = false; toast(currentLabels.noteFailed); }
         finally { editor.readOnly = false; }
@@ -2073,8 +2079,8 @@
       const scrollTop = spec.scrollTop;
       const focused = document.activeElement;
       // Card rebuilding must neither save a draft on blur nor block incoming rounds.
-      const noteEditors = [...world.querySelectorAll('.note-editor')].map(editor => ({ editor, id: editor.closest('.node').dataset.nodeId }));
-      for (const { editor } of noteEditors) editor.restoring = true;
+      const noteEditors = [...document.querySelectorAll('.note-editor')];
+      for (const editor of noteEditors) editor.restoring = true;
       const noteFocus = focused && focused.matches('.note-editor') ? { start: focused.selectionStart, end: focused.selectionEnd } : null;
       const answerFocus = focused && focused.matches('.answer-editor') ? { id: focused.dataset.answerQuestion, start: focused.selectionStart, end: focused.selectionEnd } : null;
       const radioFocus = focused && focused.matches('[data-answer-option]') ? { id: focused.closest('.question-card').dataset.questionId, option: focused.dataset.answerOption } : null;
@@ -2205,12 +2211,19 @@
           scaleEnlargedSketch();
         }
       }
-      for (const { editor, id } of noteEditors) {
-        const node = nodeRecords.get(id)?.element;
+      const referenceNotes = new Map([...world.querySelectorAll('[data-note-ref]')].filter(node => !node.closest('[hidden]')).map(node => [node.dataset.noteRef, node]));
+      for (const editor of noteEditors) {
+        const node = referenceNotes.get(editor.dataset.refId);
+        const retained = editor.closest('.reference-note-draft');
         if (node && !node.contains(editor)) {
           const note = node.querySelector('.ref-note');
           if (note) { editor.noteButton = note; note.replaceWith(editor); }
           else node.append(editor);
+          if (retained) retained.remove();
+        } else if (!node && !retained) {
+          const draft = element('div', 'reference-note-draft reference-add-error floating');
+          draft.append(element('p', '', currentLabels.noteRetained), element('p', '', editor.noteSource), editor);
+          document.getElementById('reference-add-errors').append(draft);
         }
         editor.restoring = false;
       }
