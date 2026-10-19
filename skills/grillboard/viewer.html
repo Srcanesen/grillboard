@@ -1381,7 +1381,12 @@
       toastTimer = setTimeout(() => { toastNode.hidden = true; }, 2500);
     }
 
-    function draftFor(id) { if (!answerDrafts.has(id)) answerDrafts.set(id, { option: null, text: '' }); return answerDrafts.get(id); }
+    function draftFor(id) {
+      if (!answerDrafts.has(id)) answerDrafts.set(id, { option: null, text: '' });
+      const draft = answerDrafts.get(id), q = currentSession && currentSession.questionsById[id];
+      if (draft.option !== null && (!q || !q.options.some(option => option.id === draft.option))) draft.option = null;
+      return draft;
+    }
     function growAnswer(editor) { editor.style.height = 'auto'; editor.style.height = Math.min(112, Math.max(34, editor.scrollHeight)) + 'px'; }
     function refreshAnswerControls() {
       for (const q of currentSession.questionsByStatus.asking) {
