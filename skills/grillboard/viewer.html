@@ -1495,7 +1495,9 @@
         .map(q => ({ question: q.id, ...draftFor(q.id) })).sort((a, b) => a.question.localeCompare(b.question));
       if (!items.length) return;
       const json = JSON.stringify(items);
-      if (!answerRequest || answerRequest.json !== json) answerRequest = { json, requestId: crypto.randomUUID() };
+      if (!answerRequest || answerRequest.json !== json || GrillSession.array(GrillSession.object(latestUser).answers).some(batch => batch.requestId === answerRequest.requestId)) {
+        answerRequest = { json, requestId: crypto.randomUUID() };
+      }
       sendingAnswers = true; answerError = ''; refreshAnswerControls();
       try {
         const result = await apiRequest('api/answers?requestId=' + answerRequest.requestId, 'POST', { items });
