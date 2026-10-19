@@ -163,8 +163,8 @@ def answer_batches_after(data, after=""):
 
 
 def validate_items(items):
-    if not isinstance(items, list) or not 1 <= len(items) <= 50:
-        raise RequestError(400, "Expected 1–50 answers")
+    if not isinstance(items, list) or not items:
+        raise RequestError(400, "Expected a non-empty list of answers")
     seen = set()
     for item in items:
         if not isinstance(item, dict) or set(item) != {"question", "option", "text"}:

@@ -95,10 +95,11 @@ class ValidateItemsTests(unittest.TestCase):
                          [{"question": "q2", "option": None, "text": "Own answer"}])
 
     def test_no_items(self):
-        self.reject([], "Expected 1–50 answers")
+        self.reject([], "Expected a non-empty list of answers")
 
-    def test_too_many_items(self):
-        self.reject([dict(ITEM, question=f"q{i}") for i in range(51)], "Expected 1–50 answers")
+    def test_large_frontier(self):
+        items = [dict(ITEM, question=f"q{i}") for i in range(1000)]
+        self.assertEqual(server.validate_items(items), items)
 
     def test_bad_question_id(self):
         self.reject([dict(ITEM, question="q:1")], "Bad or duplicate question")
@@ -270,6 +271,25 @@ class EntryPointTests(unittest.TestCase):
         self.assertEqual(data["answers"][0]["id"], "a1")
         self.assertEqual(data["answers"][0]["items"], [{"question": "q1", "option": "a", "text": ""}])
         self.assertEqual(data["answers"], [response["batch"]])
+
+    def test_large_frontier_persists_and_reaches_waiter(self):
+        items = [dict(ITEM, question=f"q{i}") for i in range(1000)]
+        status, response = self.post({"items": items})
+        self.assertEqual(status, 200)
+        self.assertEqual(response["batch"]["items"], items)
+        self.assertEqual(server.read_user(self.root)["answers"], [response["batch"]])
+        waiter = self.start("--wait-answers")
+        output, errors = waiter.communicate(timeout=3)
+        self.assertEqual(waiter.returncode, 0, errors)
+        self.assertEqual(json.loads(output), {"answers": [response["batch"]]})
+
+    def test_oversized_answer_request_leaves_file_unchanged(self):
+        before = (self.root / "user.js").read_bytes()
+        status, body = self.request("api/answers", "POST", b"{}", {
+            "Content-Type": "application/json", "Content-Length": str(server.MAX_BODY + 1)})
+        self.assertEqual(status, 413)
+        self.assertEqual(json.loads(body), {"ok": False, "error": "Body too large"})
+        self.assertEqual((self.root / "user.js").read_bytes(), before)
 
     def test_restart_saves_to_requested_session_when_old_port_is_reused(self):
         crashed = self.processes[0]
