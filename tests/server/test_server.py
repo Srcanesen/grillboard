@@ -369,6 +369,32 @@ sys.exit(server.main())
         self.assertEqual(len(self.processes), 2, "Launch must not start another server")
         self.assertEqual(self.post()[0], 200)
 
+    def test_launch_times_out_when_live_server_has_lost_its_state(self):
+        (self.root / "server.json").unlink()
+        launch = self.start()
+        output, errors = launch.communicate(timeout=7)
+        self.assertEqual(launch.returncode, 1)
+        self.assertEqual(output, "")
+        self.assertIn("Could not verify existing board server within 5 seconds", errors)
+        self.assertFalse((self.root / "server.json").exists())
+        self.assertEqual(self.post()[0], 200, "The existing server must remain running")
+
+    def test_launch_times_out_when_own_server_is_unresponsive(self):
+        # Suspend only the server started by this test; its socket and lock stay held.
+        import signal
+        process = self.processes[0]
+        before = (self.root / "server.json").read_bytes()
+        process.send_signal(signal.SIGSTOP)
+        try:
+            launch = self.start()
+            output, errors = launch.communicate(timeout=7)
+            self.assertEqual(launch.returncode, 1)
+            self.assertEqual(output, "")
+            self.assertIn("Could not verify existing board server within 5 seconds", errors)
+            self.assertEqual((self.root / "server.json").read_bytes(), before)
+        finally:
+            process.send_signal(signal.SIGCONT)
+
     def test_launch_reuses_same_folder_with_different_letter_case(self):
         alias = self.root.with_name(self.root.name.swapcase())
         if alias == self.root or not alias.exists() or not alias.samefile(self.root):

@@ -479,9 +479,15 @@ def live_url(root, timeout=1):
 
 def launch(root, args):
     with process_lock(root, ".server-launch.lock"):
+        deadline = time.monotonic() + 5
         timeout = 1
         while True:
-            url = live_url(root, timeout=timeout)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                print("Could not verify existing board server within 5 seconds", file=sys.stderr)
+                return 1
+            # A legacy identity check can make two requests within this budget.
+            url = live_url(root, timeout=min(timeout, remaining / 2))
             if url:
                 print(url, flush=True)
                 return 0
@@ -502,9 +508,8 @@ def launch(root, args):
             "creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
         with open(os.devnull, "r+b") as null:
             subprocess.Popen(command, stdin=null, stdout=null, stderr=null, **options)
-        deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            url = live_url(root)
+            url = live_url(root, timeout=min(1, (deadline - time.monotonic()) / 2))
             if url:
                 print(url, flush=True)
                 return 0
