@@ -130,7 +130,9 @@ def read_user(root):
         raise ValueError("Invalid answers in user.js")
     highest = 0
     seen = set()
-    request_ids = set()
+    request_ids = data.get("answerRequests", {})
+    if not isinstance(request_ids, dict):
+        raise ValueError("Invalid answer request ids in user.js")
     for batch in answers:
         match = ANSWER_ID.fullmatch(batch.get("id", "")) if isinstance(batch, dict) and isinstance(batch.get("id"), str) else None
         if (match is None or batch["id"] in seen
@@ -139,9 +141,10 @@ def read_user(root):
             raise ValueError("Invalid answer batch in user.js")
         if "requestId" in batch:
             request_id = batch["requestId"]
-            if not isinstance(request_id, str) or not REQUEST_ID.fullmatch(request_id) or request_id in request_ids:
+            if (not isinstance(request_id, str) or not REQUEST_ID.fullmatch(request_id)
+                    or request_id in request_ids and request_ids[request_id] != batch["id"]):
                 raise ValueError("Invalid answer request id in user.js")
-            request_ids.add(request_id)
+            request_ids[request_id] = batch["id"]
         try:
             datetime.strptime(batch["sent"], "%Y-%m-%dT%H:%M:%SZ")
             validate_items(batch["items"])
@@ -149,6 +152,12 @@ def read_user(root):
             raise ValueError("Invalid answer batch in user.js") from None
         seen.add(batch["id"])
         highest = max(highest, int(match[1]))
+    if any(not isinstance(request_id, str) or not REQUEST_ID.fullmatch(request_id)
+           or not isinstance(batch_id, str) or batch_id not in seen
+           for request_id, batch_id in request_ids.items()):
+        raise ValueError("Invalid answer request ids in user.js")
+    if request_ids or "answerRequests" in data:
+        data["answerRequests"] = request_ids
     counter = data.get("nextAnswerId", highest + 1)
     if type(counter) is not int or counter < 1:
         raise ValueError("Invalid answer counter in user.js")
@@ -191,6 +200,10 @@ def validate_items(items):
 
 def write_user(root, data):
     inside(root, root / "user.js")
+    # Older installs require exactly id, sent and items in each batch.
+    for batch in data.get("answers", []):
+        if "requestId" in batch:
+            data.setdefault("answerRequests", {})[batch.pop("requestId")] = batch["id"]
     atomic_write(root / "user.js", PREFIX + json.dumps(data, indent=2, ensure_ascii=False) + ";\n")
 
 
@@ -328,16 +341,19 @@ class BoardHandler(BaseHTTPRequestHandler):
             raise RequestError(400, "Bad request id")
         with self.server.user_lock:
             data = read_user(self.server.root)
-            batch = next((batch for batch in data["answers"] if batch.get("requestId") == request_id), None) if request_id else None
+            batch_id = data.get("answerRequests", {}).get(request_id)
+            batch = next((batch for batch in data["answers"] if batch["id"] == batch_id), None)
             if batch is not None:
                 if batch["items"] != items:
                     raise RequestError(400, "Request id already used for different answers")
+                if any("requestId" in saved for saved in data["answers"]):
+                    write_user(self.server.root, data)
             else:
                 batch = {"id": f"a{data['nextAnswerId']}",
                          "sent": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                          "items": items}
                 if request_id is not None:
-                    batch["requestId"] = request_id
+                    data.setdefault("answerRequests", {})[request_id] = batch["id"]
                 data["nextAnswerId"] += 1
                 data["answers"].append(batch)
                 write_user(self.server.root, data)

@@ -76,6 +76,27 @@ class ReadUserTests(unittest.TestCase):
         answers = [batch(1), dict(batch(2), requestId="retry-1")]
         self.write({"version": 1, "refs": [], "answers": answers})
         self.assertEqual(server.read_user(self.root)["answers"], answers)
+        self.assertEqual(server.read_user(self.root)["answerRequests"], {"retry-1": "a2"})
+
+    def test_top_level_request_map(self):
+        self.write({"version": 1, "refs": [], "answers": [batch(1)],
+                    "answerRequests": {"retry-1": "a1"}})
+        self.assertEqual(server.read_user(self.root)["answerRequests"], {"retry-1": "a1"})
+
+    def test_invalid_request_map(self):
+        for requests in (None, [], {"bad id": "a1"}, {"retry-1": None},
+                         {"retry-1": "a2"}, {"retry-1": 1}):
+            with self.subTest(requests=requests):
+                self.write({"version": 1, "refs": [], "answers": [batch(1)],
+                            "answerRequests": requests})
+                with self.assertRaises(ValueError):
+                    server.read_user(self.root)
+
+    def test_conflicting_embedded_request_id_is_rejected(self):
+        self.write({"version": 1, "refs": [], "answers": [batch(1), dict(batch(2), requestId="retry-1")],
+                    "answerRequests": {"retry-1": "a1"}})
+        with self.assertRaises(ValueError):
+            server.read_user(self.root)
 
     def test_invalid_or_duplicate_stored_request_id(self):
         for answers in ([dict(batch(1), requestId=None)],
@@ -294,6 +315,38 @@ class EntryPointTests(unittest.TestCase):
         self.assertEqual(data["answers"][0]["items"], [{"question": "q1", "option": "a", "text": ""}])
         self.assertEqual(data["answers"], [response["batch"]])
 
+    def test_request_id_preserves_legacy_batch_shape(self):
+        status, response = self.post(request_id="retry-1")
+        self.assertEqual(status, 200)
+        stored = json.loads((self.root / "user.js").read_text()[len(server.PREFIX):].rstrip()[:-1])
+        self.assertEqual(set(stored["answers"][0]), {"id", "sent", "items"})
+        self.assertEqual(stored["answerRequests"], {"retry-1": "a1"})
+        self.assertEqual(stored["answers"], [response["batch"]])
+
+    def test_retry_migrates_embedded_request_ids_without_another_batch(self):
+        original = batch(1)
+        stored = {"version": 1, "refs": [], "answers": [dict(original, requestId="retry-1")]}
+        (self.root / "user.js").write_text(server.PREFIX + json.dumps(stored) + ";\n")
+        self.assertEqual(self.post(request_id="retry-1"), (200, {"ok": True, "batch": original}))
+        data = json.loads((self.root / "user.js").read_text()[len(server.PREFIX):].rstrip()[:-1])
+        self.assertEqual(data["answers"], [original])
+        self.assertEqual(data["answerRequests"], {"retry-1": "a1"})
+        self.assertEqual(data["nextAnswerId"], 2)
+        self.assertEqual(self.post(request_id="retry-1")[1]["batch"], original)
+
+    def test_other_writes_preserve_the_request_map_and_migrate_embedded_ids(self):
+        stored = {"version": 1, "refs": [], "answers": [dict(batch(1), requestId="retry-1"), batch(2)],
+                  "answerRequests": {"retry-2": "a2"}}
+        (self.root / "user.js").write_text(server.PREFIX + json.dumps(stored) + ";\n")
+        status, _ = self.request("api/refs", "POST", json.dumps({"url": "https://example.com", "target": "idea"}).encode(),
+                                 {"Content-Type": "application/json"})
+        self.assertEqual(status, 200)
+        data = json.loads((self.root / "user.js").read_text()[len(server.PREFIX):].rstrip()[:-1])
+        self.assertEqual(data["answers"], [batch(1), batch(2)])
+        self.assertEqual(data["answerRequests"], {"retry-1": "a1", "retry-2": "a2"})
+        self.assertEqual(self.post(request_id="retry-1")[1]["batch"], batch(1))
+        self.assertEqual(self.post(request_id="retry-2")[1]["batch"], batch(2))
+
     def test_request_id_retry_survives_restart_and_reaches_waiter_once(self):
         body = {"items": [ITEM]}
         status, original = self.post(body, request_id="retry-1")
@@ -325,6 +378,7 @@ class EntryPointTests(unittest.TestCase):
         self.assertEqual([response["batch"]["id"] for _, response in results], ["a1"] * 8)
         self.assertEqual(server.read_user(self.root)["answers"], [results[0][1]["batch"]])
         self.assertEqual(server.read_user(self.root)["nextAnswerId"], 2)
+        self.assertEqual(server.read_user(self.root)["answerRequests"], {"concurrent-1": "a1"})
 
     def test_reused_request_id_with_different_answers_leaves_file_unchanged(self):
         self.assertEqual(self.post({"items": [ITEM]}, request_id="same-id")[0], 200)
