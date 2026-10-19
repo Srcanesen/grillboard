@@ -2051,7 +2051,7 @@
       // Disclosure controls already changed the mounted card since the last render.
       if (currentSession) for (const q of currentSession.questions) {
         const record = nodeRecords.get(q.id);
-        if (record) record.signature = JSON.stringify([questionContent(q, currentSession), currentLabels, labelLanguage(currentSession.lang), canWrite]);
+        if (record && record.signature !== null) record.signature = JSON.stringify([questionContent(q, currentSession), currentLabels, labelLanguage(currentSession.lang), renderedCanWrite]);
       }
       const scrollTop = spec.scrollTop;
       const focused = document.activeElement;
@@ -2964,22 +2964,24 @@
       return data;
     }
     async function detectServer() {
-      if (!serverMode || sessionChanged) return;
+      if (!serverMode) return;
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 1000);
       try {
         const response = await fetch(new URL('api/ping', serverBaseUrl), { cache: 'no-store', credentials: 'same-origin', signal: controller.signal });
         const data = await response.json();
-        if (sessionChanged) return;
         const valid = response.ok && data.ok === true && data.board === 1 && typeof data.session === 'string';
         if (serverSession !== null && (!valid || data.session !== serverSession)) { stopSession(); return; }
-        if (valid) serverSession = data.session;
+        if (valid) { serverSession = data.session; sessionChanged = false; }
         canWrite = valid && !hasSessionParameter;
       } catch (_) { canWrite = false; }
       finally { clearTimeout(timeout); }
     }
     function stopSession() {
       sessionChanged = true; canWrite = false;
+      // Controls disabled in place must be rebuilt when the original identity returns.
+      lastRenderedJson = null;
+      for (const record of nodeRecords.values()) record.signature = null;
       clearInterval(stepsTimer); stepsTimer = null;
       renderRoundBar();
       const notice = header.querySelector('.read-only-notice') || element('p', 'read-only-notice');
@@ -3040,6 +3042,7 @@
     // Poll both script globals together, preserving the last good session on errors.
     let failedReads = 0;
     let lastRenderedJson = null;
+    let renderedCanWrite = false;
     let latestSession = null;
     let latestUser = null;
     let loading = null;
@@ -3068,9 +3071,9 @@
     }
     function renderLatest() {
       if (!latestSession || gesture || pinch || connection || nodeResize || document.querySelector('.note-editor')) return;
-      const json = JSON.stringify([latestSession, latestUser]);
+      const json = JSON.stringify([latestSession, latestUser, canWrite, sessionChanged]);
       if (json === lastRenderedJson) return;
-      render(latestSession, latestUser); lastRenderedJson = json;
+      render(latestSession, latestUser); lastRenderedJson = json; renderedCanWrite = canWrite;
     }
     function loadFiles(force) {
       if (loading) {
