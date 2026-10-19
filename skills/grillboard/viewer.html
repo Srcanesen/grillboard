@@ -1829,10 +1829,18 @@
       if (focusBeforeLightbox && focusBeforeLightbox.isConnected) focusBeforeLightbox.focus({ preventScroll: true });
     }
     reader.addEventListener('click', event => { if (event.target === reader) closeReader(); });
-    window.addEventListener('keydown', event => { if (event.key === 'Escape' && !reader.hidden) { event.preventDefault(); closeReader(); } });
     lightbox.addEventListener('click', event => { if (!enlargedSketch || event.target === lightbox) closeLightbox(); });
-    lightbox.addEventListener('keydown', event => { if (event.key === 'Tab' && !enlargedSketch) { event.preventDefault(); lightbox.querySelector('button').focus(); } });
-    window.addEventListener('keydown', event => { if (event.key === 'Escape' && !lightbox.hidden) closeLightbox(); });
+    window.addEventListener('keydown', event => {
+      const dialog = !lightbox.hidden ? lightbox : !reader.hidden ? reader : null;
+      if (!dialog || (event.key !== 'Tab' && event.key !== 'Escape')) return;
+      event.preventDefault(); event.stopPropagation();
+      if (event.key === 'Escape') { if (dialog === lightbox) closeLightbox(); else closeReader(); return; }
+      const controls = [...dialog.querySelectorAll('button, a[href], input, textarea, select, [tabindex]')]
+        .filter(control => !control.disabled && control.tabIndex >= 0 && control.getClientRects().length);
+      const index = controls.indexOf(document.activeElement);
+      const next = index < 0 ? (event.shiftKey ? controls.length - 1 : 0) : (index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
+      if (controls[next]) controls[next].focus({ preventScroll: true });
+    }, true);
 
     // Nodes and the enlarged overlay share safe, revision-aware sketch frames.
     function usableSketches() { return currentSession ? currentSession.boardSketches : []; }
@@ -2594,6 +2602,14 @@
       control.textContent = flow === 'td' ? '↓' : '→'; control.title = label; control.setAttribute('aria-label', label);
     }
     function renderToolbar() {
+      if (toolbar.children.length) {
+        const labels = [currentLabels.zoomOut, currentLabels.zoomIn, currentLabels.fit, currentLabels.focusRound, '', currentLabels.resetLayout];
+        toolbar.setAttribute('aria-label', currentLabels.toolbar);
+        toolbar.querySelectorAll('button').forEach((control, index) => {
+          control.title = labels[index]; control.setAttribute('aria-label', labels[index]);
+        });
+        updateFlowButton(); applyView(); return;
+      }
       const percent = element('span'); percent.id = 'zoom-percent'; percent.setAttribute('aria-live', 'off');
       toolbar.setAttribute('aria-label', currentLabels.toolbar);
       toolbar.replaceChildren(
