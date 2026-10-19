@@ -2126,6 +2126,8 @@
       }
     }
     function registerNode(id, node, metadata) {
+      const replaced = nodeRecords.get(id);
+      if (replaced && replaced.element !== node) replaced.element.remove();
       node.classList.add('node'); node.dataset.nodeId = id;
       if (node.parentNode !== world) world.append(node);
       const record = { id, element: node, signature: node.contentSignature, ...metadata };
