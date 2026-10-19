@@ -3,8 +3,7 @@ import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { browserTest as test, serve, stop, until } from './headless-board.mjs';
-import { inputBrowser } from './input-board.mjs';
+import { browserTest as test, browser, serve, stop, until } from './headless-board.mjs';
 
 async function withDialog(protocol, check, sketchHtml = '<html><body><button style="position:fixed;inset:0;width:100%;height:100%">Sketch button</button></body></html>') {
   const root = await mkdtemp(path.join(tmpdir(), 'grill-dialog-'));
@@ -19,7 +18,7 @@ async function withDialog(protocol, check, sketchHtml = '<html><body><button sty
       research: [{ id: 's1', topic: 'Storage', status: 'done', report: 'report.md' }]
     }) + ';\n');
     const url = protocol === 'file' ? pathToFileURL(path.join(root, 'index.html')).href : await serve(root, children);
-    const page = await inputBrowser(path.join(root, 'chrome-profile'), children);
+    const page = await browser(path.join(root, 'chrome-profile'), children);
     await page.go(url);
     await until(() => page.evaluate('typeof currentSession !== "undefined" && !!currentSession'), 'board render');
     await page.evaluate(`document.querySelector('.sketch-card').focus(); openEnlargedSketch('k1');`);

@@ -2,8 +2,7 @@ import assert from 'node:assert/strict';
 import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { browserTest as test, serve, stop, until } from './headless-board.mjs';
-import { inputBrowser } from './input-board.mjs';
+import { browserTest as test, browser, serve, stop, until } from './headless-board.mjs';
 
 for (const activation of ['pointer', 'keyboard']) for (const trigger of ['answer click', 'card drag']) test('a variant button works by ' + activation + ' immediately after an independent ' + trigger, async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'grill-click-'));
@@ -15,7 +14,7 @@ for (const activation of ['pointer', 'keyboard']) for (const trigger of ['answer
       { id: 'q1', title: 'Storage?', status: 'asking', options: [{ id: 'a', label: 'Files', sketch: 'sketch.html', width: 400, height: 300 }] }
     ] }) + ';\n');
     const url = await serve(root, children);
-    const page = await inputBrowser(path.join(root, 'chrome-profile'), children);
+    const page = await browser(path.join(root, 'chrome-profile'), children);
     await page.go(url);
     await until(() => page.evaluate('typeof currentSession !== "undefined" && !!currentSession'), 'board render');
     await page.evaluate('finishMotion(); focusView(false, ["q1"]); window.deliveredClicks = 0; canvas.addEventListener("click", () => deliveredClicks++, true)');

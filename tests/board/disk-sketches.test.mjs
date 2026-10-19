@@ -3,8 +3,7 @@ import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { browserTest as test, stop, until } from './headless-board.mjs';
-import { inputBrowser } from './input-board.mjs';
+import { browserTest as test, browser, stop, until } from './headless-board.mjs';
 
 test('disk sketches preserve input on unrelated saves and refresh when their own path or revision changes', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'grill-disk-sketch-'));
@@ -16,7 +15,7 @@ test('disk sketches preserve input on unrelated saves and refresh when their own
     const save = () => writeFile(path.join(root, 'session.js'), 'window.__GRILL__ = ' + JSON.stringify(data) + ';\n');
     await writeFile(path.join(root, 'option.html'), '<html><body>Before sketch<input style="position:fixed;inset:0;width:100%;height:100%"></body></html>');
     await save();
-    const page = await inputBrowser(path.join(root, 'chrome-profile'), children);
+    const page = await browser(path.join(root, 'chrome-profile'), children);
     await page.go(pathToFileURL(path.join(root, 'index.html')).href);
     await until(() => page.evaluate('typeof currentSession !== "undefined" && !!currentSession'), 'disk render');
     await page.evaluate('document.querySelector(".variant-open").focus(); document.querySelector(".variant-open").click()');
