@@ -2558,7 +2558,16 @@
       recordInteraction();
       cancelGlide();
       const boxes = [...nodeRecords.values()].map(({ x, y, width, height }) => ({ x, y, width, height }));
-      glideView(GrillCamera.fit(boxes, measureScreen()), animate === true);
+      const screen = measureScreen();
+      let target = GrillCamera.fit(boxes, screen);
+      if (screen.width < 900 && screen.specPanel) {
+        const bottom = Math.min(screen.specPanel.top, screen.toolbar.top - 8, screen.roundBar ? screen.roundBar.top - 8 : screen.height);
+        if (boxes.some(box => box.y * target.z + target.y < screen.header.bottom + 8 || (box.y + box.height) * target.z + target.y > bottom)) {
+          specCollapsed = true; updateSpec();
+          target = GrillCamera.fit(boxes, measureScreen());
+        }
+      }
+      glideView(target, animate === true);
     }
     // Focus the current frontier while respecting recent manual navigation.
     function recordInteraction() { lastInteraction = Date.now(); }
