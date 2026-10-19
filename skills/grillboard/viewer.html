@@ -939,7 +939,7 @@
         mdDecisions: 'Decisions', mdArchitecture: 'Architecture', mdOpen: 'Open questions',
         live: 'Live', references: 'References', yours: 'Yours', addNote: 'Add a note',
         dropHint: 'Drop to add a reference', refAdded: 'Reference added', refFailed: 'Could not add the reference', noteFailed: 'Could not save the note. Try again.', retryReference: 'Retry',
-        needServer: 'Adding references needs the board server.', badType: 'Only PNG, JPEG, GIF and WebP pictures can be added.',
+        needServer: 'Adding references needs the board server.', referenceOffline: 'Could not reach the board server. Try again.', pictureTooLarge: 'This picture is too large. Use a smaller picture.', badType: 'Only PNG, JPEG, GIF and WebP pictures can be added.',
         fit: 'Fit to screen', zoomIn: 'Zoom in', zoomOut: 'Zoom out', resetLayout: 'Reset layout',
         toggleSpec: 'Show or hide the spec', close: 'Close', openLink: 'Open link', deleteRef: 'Delete reference', mdReferences: 'References',
         focusRound: 'Go to the current round', toolbar: 'Board controls', research: 'Research',
@@ -969,7 +969,7 @@
         mdDecisions: 'Kararlar', mdArchitecture: 'Mimari', mdOpen: 'Açık kalan sorular',
         live: 'Canlı', references: 'Referanslar', yours: 'Sizin', addNote: 'Not ekle',
         dropHint: 'Referans eklemek için bırakın', refAdded: 'Referans eklendi', refFailed: 'Referans eklenemedi', noteFailed: 'Not kaydedilemedi. Tekrar deneyin.', retryReference: 'Tekrar dene',
-        needServer: 'Referans eklemek için pano sunucusu gerekir.', badType: 'Yalnızca PNG, JPEG, GIF ve WebP görselleri eklenebilir.',
+        needServer: 'Referans eklemek için pano sunucusu gerekir.', referenceOffline: 'Pano sunucusuna ulaşılamadı. Tekrar deneyin.', pictureTooLarge: 'Bu görsel çok büyük. Daha küçük bir görsel kullanın.', badType: 'Yalnızca PNG, JPEG, GIF ve WebP görselleri eklenebilir.',
         fit: 'Ekrana sığdır', zoomIn: 'Yakınlaştır', zoomOut: 'Uzaklaştır', resetLayout: 'Yerleşimi sıfırla',
         toggleSpec: 'Spec panelini göster veya gizle', close: 'Kapat', openLink: 'Bağlantıyı aç', deleteRef: 'Referansı sil', mdReferences: 'Referanslar',
         focusRound: 'Güncel tura git', toolbar: 'Pano denetimleri', research: 'Araştırma',
@@ -2993,8 +2993,8 @@
       const response = await fetch(new URL(path, serverBaseUrl), options);
       if (response.status === 409) stopSession();
       let data;
-      try { data = await response.json(); } catch (_) { throw new Error(response.statusText || String(response.status)); }
-      if (!response.ok || !data || data.ok !== true) throw new Error(GrillSession.string(data && data.error) || response.statusText || String(response.status));
+      try { data = await response.json(); } catch (_) { throw Object.assign(new Error(response.statusText || String(response.status)), { status: response.status }); }
+      if (!response.ok || !data || data.ok !== true) throw Object.assign(new Error(GrillSession.string(data && data.error) || response.statusText || String(response.status)), { status: response.status });
       return data;
     }
     async function detectServer() {
@@ -3036,7 +3036,7 @@
       try {
         let data;
         if (file) {
-          if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type)) { toast(currentLabels.badType); return; }
+          if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type)) throw new Error(currentLabels.badType);
           const query = new URLSearchParams({ target, name: file.name || '' });
           data = await apiRequest('api/refs?' + query, 'POST', file, file.type);
         } else data = await apiRequest('api/refs', 'POST', { url, target });
@@ -3046,12 +3046,14 @@
       } catch (error) {
         if (!failure) {
           failure = element('div', 'reference-add-error floating');
-          failure.append(element('p', '', currentLabels.refFailed), element('p', '', file ? file.name : url));
-          failure.append(button(currentLabels.retryReference, currentLabels.retryReference, () => addReference(file, url, target, position, failure), 'retry-reference'));
-          failure.append(button('×', currentLabels.close, () => failure.remove(), 'dismiss-reference'));
           document.getElementById('reference-add-errors').append(failure);
         }
-        failure.querySelector('.retry-reference').disabled = false;
+        const transportError = error instanceof TypeError || ['AbortError', 'TimeoutError'].includes(error.name);
+        const retryable = canWrite && (transportError || error.status >= 500 || error.status === 408 || error.status === 429);
+        const reason = error.status === 413 ? currentLabels.pictureTooLarge : transportError ? currentLabels.referenceOffline : error.message;
+        failure.replaceChildren(element('p', '', currentLabels.refFailed), element('p', 'reference-add-reason', reason), element('p', '', file ? file.name : url));
+        if (retryable) failure.append(button(currentLabels.retryReference, currentLabels.retryReference, () => addReference(file, url, target, position, failure), 'retry-reference'));
+        failure.append(button('×', currentLabels.close, () => failure.remove(), 'dismiss-reference'));
       }
     }
     let dragDepth = 0;
