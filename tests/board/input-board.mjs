@@ -75,7 +75,7 @@ export async function inputBrowser(profile, children) {
     },
     async key(key, shift = false) {
       const windowsVirtualKeyCode = { Tab: 9, Escape: 27, Enter: 13 }[key];
-      await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key, windowsVirtualKeyCode, modifiers: shift ? 8 : 0 });
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key, windowsVirtualKeyCode, modifiers: shift ? 8 : 0, text: key === 'Enter' ? '\r' : undefined });
       await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key, windowsVirtualKeyCode, modifiers: shift ? 8 : 0 });
     },
     async click(selector) {

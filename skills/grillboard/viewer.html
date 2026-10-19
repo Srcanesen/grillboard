@@ -2779,6 +2779,7 @@
       delete manualOffsets[ended.record.id]; saveOffsets(); applyOffsets(); scheduleLines();
     }
     function refByNodeId(id) { return currentUserRefs.find(ref => ref.nodeId === id); }
+    canvas.addEventListener('pointerdown', () => { suppressClickUntil = 0; }, true);
     canvas.addEventListener('pointerdown', event => {
       if (nodeResize) { event.preventDefault(); return; }
       if (event.button !== 0) return;
@@ -2898,7 +2899,7 @@
     canvas.addEventListener('pointerup', event => endPointer(event, false));
     canvas.addEventListener('pointercancel', event => endPointer(event, true));
     canvas.addEventListener('click', event => {
-      if (Date.now() < suppressClickUntil) { event.preventDefault(); event.stopImmediatePropagation(); }
+      if (event.detail > 0 && Date.now() < suppressClickUntil) { event.preventDefault(); event.stopImmediatePropagation(); }
     }, true);
     canvas.addEventListener('wheel', event => {
       if (event.target.closest('textarea, input')) return;
