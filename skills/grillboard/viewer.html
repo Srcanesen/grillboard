@@ -2965,8 +2965,10 @@
     }
     async function detectServer() {
       if (!serverMode || sessionChanged) return;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 1000);
       try {
-        const response = await fetch(new URL('api/ping', serverBaseUrl), { cache: 'no-store', credentials: 'same-origin' });
+        const response = await fetch(new URL('api/ping', serverBaseUrl), { cache: 'no-store', credentials: 'same-origin', signal: controller.signal });
         const data = await response.json();
         if (sessionChanged) return;
         const valid = response.ok && data.ok === true && data.board === 1 && typeof data.session === 'string';
@@ -2974,6 +2976,7 @@
         if (valid) serverSession = data.session;
         canWrite = valid && !hasSessionParameter;
       } catch (_) { canWrite = false; }
+      finally { clearTimeout(timeout); }
     }
     function stopSession() {
       sessionChanged = true; canWrite = false;
