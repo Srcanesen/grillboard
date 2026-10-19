@@ -77,7 +77,7 @@
     .question-card.unseen.highlight { animation: card-highlight 1.2s ease-out, unseen-pulse 1.5s ease-in-out infinite; }
     .question-card.unseen .question-header { animation: unseen-header 1.5s ease-in-out infinite; }
     #world.far .question-card.unseen { animation: unseen-pulse 1.5s ease-in-out infinite, unseen-fill 1.5s ease-in-out infinite; }
-    .question-card.unseen::after { content: attr(data-new-label); position: absolute; top: -1em; right: 12px; padding: .1em .8em; border-radius: 999px; background: var(--accent); color: var(--on-accent); border: 2px solid var(--card); font-size: clamp(12px, calc(11px / var(--z, 1)), 28px); font-weight: 700; line-height: 1.6; pointer-events: none; animation: unseen-label 1.5s ease-in-out infinite; }
+    .question-card.unseen::after { content: attr(data-new-label); position: absolute; top: -1em; right: 12px; padding: .1em .8em; border-radius: 999px; background: var(--accent); color: var(--on-accent); border: 2px solid var(--card); font-size: max(12px, calc(11px / var(--z, 1))); white-space: nowrap; font-weight: 700; line-height: 1.6; pointer-events: none; animation: unseen-label 1.5s ease-in-out infinite; }
     #world.far .question-card.unseen::after { top: -2.1em; }
     @keyframes unseen-pulse {
       0%, 100% { box-shadow: var(--shadow), 0 0 0 0 transparent, 0 0 0 0 transparent; }
