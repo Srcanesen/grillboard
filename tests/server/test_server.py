@@ -291,7 +291,68 @@ class EntryPointTests(unittest.TestCase):
         self.assertEqual(json.loads(body), {"ok": False, "error": "Body too large"})
         self.assertEqual((self.root / "user.js").read_bytes(), before)
 
+    def legacy_server(self, root, port=0):
+        code = """import sys
+sys.path.insert(0, sys.argv.pop(1))
+import server
+class LegacyHandler(server.BoardHandler):
+    def dispatch(self):
+        if self.path.partition("?")[0] == "/api/ping" and self.command == "GET":
+            self.json_response(200, {"ok": True, "board": 1})
+        else:
+            super().dispatch()
+server.BoardHandler = LegacyHandler
+sys.exit(server.main())
+"""
+        process = subprocess.Popen(
+            [sys.executable, "-c", code, str(SERVER_PATH.parent), str(root),
+             "--serve", "--port", str(port)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.processes.append(process)
+        with selectors.DefaultSelector() as ready:
+            ready.register(process.stdout, selectors.EVENT_READ)
+            self.assertTrue(ready.select(timeout=5), "Legacy server did not start")
+        url = process.stdout.readline().strip()
+        self.assertRegex(url, r"^http://127\.0\.0\.1:[0-9]+/$")
+        self.assertGreater(int(url.split(":")[2].rstrip("/")), 9000)
+        return url
+
+    def test_launch_reuses_own_legacy_server_and_preserves_state(self):
+        self.processes[0].terminate()
+        self.processes[0].communicate(timeout=3)
+        self.url = self.legacy_server(self.root)
+        before = (self.root / "server.json").read_bytes()
+        launch = self.start()
+        output, errors = launch.communicate(timeout=8)
+        self.assertEqual(launch.returncode, 0, errors)
+        self.assertEqual(output.strip(), self.url)
+        self.assertEqual((self.root / "server.json").read_bytes(), before)
+        self.assertEqual(self.post()[0], 200)
+        self.assertEqual([answer["items"] for answer in server.read_user(self.root)["answers"]],
+                         [[{"question": "q1", "option": "a", "text": ""}]])
+        self.assertEqual(list(self.root.glob("grill-probe-*")), [])
+
+    def test_launch_reuses_same_folder_with_different_letter_case(self):
+        alias = self.root.with_name(self.root.name.swapcase())
+        if alias == self.root or not alias.exists() or not alias.samefile(self.root):
+            self.skipTest("Case-insensitive filesystem required")
+        before = (self.root / "server.json").read_bytes()
+        launch = subprocess.run([sys.executable, str(SERVER_PATH), str(alias)],
+                                capture_output=True, text=True, timeout=8)
+        self.assertEqual(launch.returncode, 0, launch.stderr)
+        self.assertEqual(launch.stdout.strip(), self.url)
+        self.assertEqual((self.root / "server.json").read_bytes(), before)
+        self.assertEqual(self.post()[0], 200)
+        self.assertEqual([answer["items"] for answer in server.read_user(alias)["answers"]],
+                         [[{"question": "q1", "option": "a", "text": ""}]])
+
     def test_restart_saves_to_requested_session_when_old_port_is_reused(self):
+        self.restart_with_reused_port(legacy=False)
+
+    def test_restart_rejects_another_sessions_legacy_ping(self):
+        self.restart_with_reused_port(legacy=True)
+
+    def restart_with_reused_port(self, legacy):
         crashed = self.processes[0]
         crashed.kill()
         crashed.communicate(timeout=3)
@@ -299,14 +360,17 @@ class EntryPointTests(unittest.TestCase):
         other.mkdir()
         port = self.url.split(":")[2].rstrip("/")
         self.assertGreater(int(port), 9000)
-        listener = subprocess.Popen(
-            [sys.executable, str(SERVER_PATH), str(other), "--serve", "--port", port],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        self.processes.append(listener)
-        with selectors.DefaultSelector() as ready:
-            ready.register(listener.stdout, selectors.EVENT_READ)
-            self.assertTrue(ready.select(timeout=5), "Other server did not start")
-        self.assertEqual(listener.stdout.readline().strip(), self.url)
+        if legacy:
+            self.assertEqual(self.legacy_server(other, port), self.url)
+        else:
+            listener = subprocess.Popen(
+                [sys.executable, str(SERVER_PATH), str(other), "--serve", "--port", port],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.processes.append(listener)
+            with selectors.DefaultSelector() as ready:
+                ready.register(listener.stdout, selectors.EVENT_READ)
+                self.assertTrue(ready.select(timeout=5), "Other server did not start")
+            self.assertEqual(listener.stdout.readline().strip(), self.url)
 
         # Keep handles to the real detached children so cleanup stops only our servers.
         popen = subprocess.Popen
@@ -324,6 +388,7 @@ class EntryPointTests(unittest.TestCase):
         self.assertEqual([answer["items"] for answer in server.read_user(self.root)["answers"]],
                          [[{"question": "q1", "option": "a", "text": ""}]])
         self.assertEqual(server.read_user(other)["answers"], [])
+        self.assertEqual(list(self.root.glob("grill-probe-*")), [])
 
     def test_missing_header_leaves_file_unchanged(self):
         before = (self.root / "user.js").read_bytes()

@@ -16,6 +16,7 @@ import threading
 import time
 import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, unquote, urlsplit
 from urllib.request import ProxyHandler, build_opener
 
@@ -452,8 +453,19 @@ def live_url(root):
         opener = build_opener(ProxyHandler({}), NoRedirect())
         with opener.open(url + "api/ping", timeout=1) as response:
             data = json.loads(response.read(4096))
-            return url if (isinstance(data, dict) and data.get("ok") is True
-                           and data.get("board") == 1 and data.get("session") == str(root)) else None
+            if not (isinstance(data, dict) and data.get("ok") is True and data.get("board") == 1):
+                return None
+            if "session" in data:
+                return url if isinstance(data["session"], str) and os.path.samefile(root, data["session"]) else None
+        # Older servers have no identity field: prove they serve this directory before reuse.
+        with tempfile.TemporaryDirectory(dir=root, prefix="grill-probe-") as probe:
+            token = os.urandom(32)
+            (Path(probe) / "identity").write_bytes(token)
+            with opener.open(url + Path(probe).name + "/identity", timeout=1) as response:
+                return url if response.read(len(token) + 1) == token else None
+    except HTTPError as error:
+        error.close()
+        return None
     except (OSError, ValueError, KeyError, TypeError):
         return None
 
