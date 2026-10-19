@@ -1327,7 +1327,7 @@
     const panelWidthKey = 'grill-panel-width:' + window.location.pathname + sessionUrl;
     let panelWidth = readPanelWidth();
     const sketchNodes = new Map();
-    let sketchSessionJson = '', variantRevision = 0;
+    let sketchSessionJson = '';
     let enlargedSketch = null;
     const researchSteps = new Map();
     let stepViews = new Map();
@@ -1491,7 +1491,7 @@
       if (!option.sketch || !safeSource(option.sketch)) return null;
       const url = new URL(option.sketch, sessionUrl), base = new URL('.', sessionUrl);
       if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname) || !/\.html?$/i.test(url.pathname)) return null;
-      return { id: q.id + ':' + option.id, title: option.label, src: option.sketch, width: option.width, height: option.height, rev: variantRevision };
+      return { id: q.id + ':' + option.id, title: option.label, src: option.sketch, width: option.width, height: option.height, rev: 0 };
     }
 
     // Questions lead each card; detail and research disclosure stay in memory.
@@ -1882,6 +1882,21 @@
       url.searchParams.set('rev', String(sketch.rev));
       return url.href;
     }
+    function loadSketchSurface(surface, url) {
+      const request = {}; surface.sketchRequest = request;
+      // Embedded browsers can block a framed page; over http the sketch is read as text and handed to the frame instead.
+      if (surface.tagName === 'IFRAME' && /^https?:$/.test(location.protocol) && new URL(url).origin === location.origin) {
+        fetch(url, { cache: 'no-store' })
+          .then(response => response.ok ? response.text() : Promise.reject(new Error(String(response.status))))
+          .then(text => {
+            if (surface.sketchRequest !== request) return;
+            const base = '<base href="' + url.replace(/&/g, '&amp;') + '">';
+            const document = /<head[^>]*>/i.test(text) ? text.replace(/<head[^>]*>/i, match => match + base) : base + text;
+            if (surface.srcdoc !== document) surface.srcdoc = document;
+          })
+          .catch(() => { if (surface.sketchRequest === request && surface.src !== url) surface.src = url; });
+      } else if (surface.src !== url) surface.src = url;
+    }
     function createSketchFrame(sketch) {
       const url = sketchUrl(sketch);
       const html = /\.html?$/i.test(new URL(url).pathname);
@@ -1891,27 +1906,20 @@
         surface.setAttribute('referrerpolicy', 'no-referrer');
         surface.setAttribute('loading', 'eager');
       }
-      // Embedded browsers can block a framed page; over http the sketch is read as text and handed to the frame instead.
-      if (html && /^https?:$/.test(location.protocol) && new URL(url).origin === location.origin) {
-        fetch(url, { cache: 'no-store' })
-          .then(response => response.ok ? response.text() : Promise.reject(new Error(String(response.status))))
-          .then(text => {
-            const base = '<base href="' + url.replace(/&/g, '&amp;') + '">';
-            surface.srcdoc = /<head[^>]*>/i.test(text) ? text.replace(/<head[^>]*>/i, match => match + base) : base + text;
-          })
-          .catch(() => { surface.src = url; });
-      } else {
-        surface.src = url;
-      }
+      loadSketchSurface(surface, url);
       const frame = element('div', 'sketch-frame'); frame.append(surface);
-      return { frame, surface, key: new URL(sketch.src, sessionUrl).href + '\n' + sketch.rev };
+      return { frame, surface, key: new URL(sketch.src, sessionUrl).href + '\n' + sketch.rev, checkedSession: sketchSessionJson };
     }
-    function refreshSketchFrame(embedded, sketch) {
+    function refreshSketchFrame(embedded, sketch, checkContent = false) {
       const key = new URL(sketch.src, sessionUrl).href + '\n' + sketch.rev;
       if (!embedded || embedded.key !== key) {
         const next = createSketchFrame(sketch);
         if (embedded) embedded.frame.replaceWith(next.frame);
         embedded = next;
+      }
+      if (checkContent && embedded.checkedSession !== sketchSessionJson) {
+        embedded.checkedSession = sketchSessionJson;
+        loadSketchSurface(embedded.surface, sketchUrl(sketch));
       }
       embedded.sketch = sketch;
       return embedded;
@@ -2030,9 +2038,8 @@
       const radioFocus = focused && focused.matches('[data-answer-option]') ? { id: focused.closest('.question-card').dataset.questionId, option: focused.dataset.answerOption } : null;
       const focusId = focused && focused.closest('.node') && focused.closest('.node').dataset.nodeId;
       currentSession = GrillSession.model(session, user, { serverMode, baseUrl: sessionUrl, imageSources: referenceImageSources });
-      // Variants have no revision field in the session contract: a changed session refreshes their files.
-      const sketchJson = JSON.stringify(session);
-      if (sketchJson !== sketchSessionJson) { sketchSessionJson = sketchJson; variantRevision++; }
+      // Variants have no revision field: check their files after a save, preserving unchanged documents.
+      sketchSessionJson = JSON.stringify(session);
       const changedData = JSON.stringify(previousSession) !== JSON.stringify(currentSession);
       const changes = GrillChanges.between(previousSession, currentSession, { idle: Date.now() - lastInteraction >= 10000 });
       previousSession = currentSession;
@@ -2141,7 +2148,7 @@
         const sketch = variants.find(sketch => sketch.id === visual.variant.sketch.id);
         // Keep the object used by the option's open button current as well.
         Object.assign(visual.variant.sketch, sketch);
-        visual.variant = refreshSketchFrame(visual.variant, visual.variant.sketch);
+        visual.variant = refreshSketchFrame(visual.variant, visual.variant.sketch, true);
         variantObserver.observe(visual);
       }
       if (enlargedSketch) {
@@ -2149,7 +2156,7 @@
         if (!sketch) closeLightbox();
         else {
           const heading = enlargedSketch.heading;
-          enlargedSketch = { ...refreshSketchFrame(enlargedSketch, sketch), heading };
+          enlargedSketch = { ...refreshSketchFrame(enlargedSketch, sketch, variants.includes(sketch)), heading };
           heading.querySelector('h2').textContent = sketch.title;
           heading.querySelector('a').href = sketchUrl(sketch);
           lightbox.setAttribute('aria-label', sketch.title || currentLabels.sketch);

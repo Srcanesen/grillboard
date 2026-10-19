@@ -9,6 +9,53 @@ const question = {
   options: [{ id: 'a', label: 'Files' }, { id: 'b', label: 'SQLite' }]
 };
 
+test('unrelated saves do not reload mounted option sketches and only changed content reloads', async t => {
+  const data = { title: 'Initial', questions: [{ ...question, options: [
+    { id: 'a', label: 'Files', sketch: 'option-a.html' },
+    { id: 'b', label: 'SQLite', sketch: 'option-b.html' }
+  ] }] };
+  await withBoard({}, async ({ root, page, session }) => {
+    for (const file of ['option-a.html', 'option-b.html']) await writeFile(path.join(root, file), '<html><body>Initial sketch</body></html>');
+    await page.evaluate(`window.sketchLoads = { a: 0, b: 0, overlay: 0 };
+      document.addEventListener('load', event => {
+        if (event.target.tagName !== 'IFRAME') return;
+        const option = event.target.closest('[data-answer-option]');
+        if (option) sketchLoads[option.dataset.answerOption]++;
+        else if (event.target.closest('#lightbox')) sketchLoads.overlay++;
+      }, true);`);
+    await session(data);
+    await until(() => page.evaluate('sketchLoads.a === 1 && sketchLoads.b === 1'), 'initial option loads');
+    await page.evaluate('document.querySelector(".variant-open").click()');
+    await until(() => page.evaluate('sketchLoads.overlay === 1'), 'initial enlarged option');
+    await page.evaluate('new Promise(resolve => setTimeout(resolve, 100))');
+    await page.evaluate(`window.originalSketchFrames = [...document.querySelectorAll('iframe')];
+      window.sketchLoads = { a: 0, b: 0, overlay: 0 };
+      window.sketchReads = []; window.fetchBeforeSketchCheck = fetch;
+      window.fetch = (...args) => {
+        const response = fetchBeforeSketchCheck(...args);
+        if (/option-[ab]\.html/.test(String(args[0]))) sketchReads.push(response.then(result => result.clone().text()));
+        return response;
+      };`);
+    const settle = () => page.evaluate(`(async () => {
+      await Promise.all(sketchReads); sketchReads = [];
+      await new Promise(resolve => setTimeout(resolve, 100));
+    })()`);
+    data.title = 'Unrelated title change';
+    await session(data); await settle();
+    const unchanged = await page.evaluate('sketchLoads');
+    t.diagnostic('Unrelated save reloads: ' + JSON.stringify(unchanged));
+    assert.deepEqual(unchanged, { a: 0, b: 0, overlay: 0 });
+    assert.equal(await page.evaluate('originalSketchFrames.every((frame, index) => frame === document.querySelectorAll("iframe")[index])'), true);
+    await writeFile(path.join(root, 'option-a.html'), '<html><body>Updated option A</body></html>');
+    data.architecture = ['Another unrelated session field'];
+    await session(data);
+    await until(() => page.evaluate('sketchLoads.a === 1 && sketchLoads.overlay === 1'), 'changed option and overlay reload');
+    await settle();
+    assert.deepEqual(await page.evaluate('sketchLoads'), { a: 1, b: 0, overlay: 1 });
+    assert.match(await page.evaluate('document.querySelector("#lightbox iframe").srcdoc'), /Updated option A/);
+  });
+});
+
 test('removing a selected option prevents submission and preserves the own answer', async () => {
   await withBoard({ questions: [question] }, async ({ root, page, session }) => {
     await page.evaluate('document.querySelector("[data-answer-option=a]").click()');
