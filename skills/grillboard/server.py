@@ -446,7 +446,7 @@ class BoardHandler(BaseHTTPRequestHandler):
             raise RequestError(404, "File not found") from None
 
 
-def live_url(root):
+def live_url(root, timeout=1):
     try:
         state = json.loads(inside(root, root / "server.json").read_text(encoding="utf-8"))
         url = state["url"]
@@ -458,7 +458,7 @@ def live_url(root):
             def redirect_request(self, *args, **kwargs):
                 return None
         opener = build_opener(ProxyHandler({}), NoRedirect())
-        with opener.open(url + "api/ping", timeout=1) as response:
+        with opener.open(url + "api/ping", timeout=timeout) as response:
             data = json.loads(response.read(4096))
             if not (isinstance(data, dict) and data.get("ok") is True and data.get("board") == 1):
                 return None
@@ -468,7 +468,7 @@ def live_url(root):
         with tempfile.TemporaryDirectory(dir=root, prefix="grill-probe-") as probe:
             token = os.urandom(32)
             (Path(probe) / "identity").write_bytes(token)
-            with opener.open(url + Path(probe).name + "/identity", timeout=1) as response:
+            with opener.open(url + Path(probe).name + "/identity", timeout=timeout) as response:
                 return url if response.read(len(token) + 1) == token else None
     except HTTPError as error:
         error.close()
@@ -479,10 +479,22 @@ def live_url(root):
 
 def launch(root, args):
     with process_lock(root, ".server-launch.lock"):
-        url = live_url(root)
-        if url:
-            print(url, flush=True)
-            return 0
+        timeout = 1
+        while True:
+            url = live_url(root, timeout=timeout)
+            if url:
+                print(url, flush=True)
+                return 0
+            try:
+                with process_lock(root, ".server.lock", blocking=False):
+                    break
+            except OSError as error:
+                if not isinstance(error, BlockingIOError) and (os.name != "nt" or error.errno not in (13, 36)):
+                    raise
+            # A held session lock means its server is still alive, even when ping is slow.
+            # Keep its published address and give the identity check more time.
+            timeout = min(timeout * 2, 30)
+            time.sleep(0.05)
         (root / "server.json").unlink(missing_ok=True)
         command = [sys.executable, str(Path(__file__).resolve()), str(root), "--serve",
                    "--port", str(args.port), "--idle-minutes", str(args.idle_minutes)]

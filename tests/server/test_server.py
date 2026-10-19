@@ -331,6 +331,44 @@ sys.exit(server.main())
                          [[{"question": "q1", "option": "a", "text": ""}]])
         self.assertEqual(list(self.root.glob("grill-probe-*")), [])
 
+    def test_launch_preserves_and_reuses_own_slow_server(self):
+        self.processes[0].terminate()
+        self.processes[0].communicate(timeout=3)
+        code = """import sys, time
+sys.path.insert(0, sys.argv.pop(1))
+import server
+class SlowHandler(server.BoardHandler):
+    def dispatch(self):
+        if self.path.partition("?")[0] == "/api/ping":
+            time.sleep(1.3)
+        super().dispatch()
+server.BoardHandler = SlowHandler
+sys.exit(server.main())
+"""
+        process = subprocess.Popen(
+            [sys.executable, "-c", code, str(SERVER_PATH.parent), str(self.root),
+             "--serve", "--port", "0"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.processes.append(process)
+        with selectors.DefaultSelector() as ready:
+            ready.register(process.stdout, selectors.EVENT_READ)
+            self.assertTrue(ready.select(timeout=5), "Slow server did not start")
+        self.url = process.stdout.readline().strip()
+        before = (self.root / "server.json").read_bytes()
+        popen = subprocess.Popen
+        def tracked_start(*args, **kwargs):
+            child = popen(*args, **kwargs)
+            self.processes.append(child)
+            return child
+        output = io.StringIO()
+        with patch.object(server.subprocess, "Popen", tracked_start), redirect_stdout(output):
+            result = server.launch(self.root, SimpleNamespace(port=0, idle_minutes=30))
+        self.assertEqual(result, 0)
+        self.assertEqual(output.getvalue().strip(), self.url)
+        self.assertEqual((self.root / "server.json").read_bytes(), before)
+        self.assertEqual(len(self.processes), 2, "Launch must not start another server")
+        self.assertEqual(self.post()[0], 200)
+
     def test_launch_reuses_same_folder_with_different_letter_case(self):
         alias = self.root.with_name(self.root.name.swapcase())
         if alias == self.root or not alias.exists() or not alias.samefile(self.root):
