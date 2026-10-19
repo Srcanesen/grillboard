@@ -281,6 +281,13 @@ class BoardHandler(BaseHTTPRequestHandler):
 
     def dispatch(self):
         try:
+            expected = self.headers.get("X-Grill-Session")
+            if expected is not None:
+                expected = unquote(expected)
+            else:
+                expected = parse_qs(self.path.partition("?")[2], keep_blank_values=True).get("grill-session", [None])[0]
+            if expected is not None and expected != str(self.server.root):
+                raise RequestError(409, "Server session changed")
             path = self.path.partition("?")[0]
             if self.is_api():
                 if path == "/api/ping" and self.command == "GET":

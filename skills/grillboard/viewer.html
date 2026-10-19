@@ -921,6 +921,7 @@
         progress: '{done} of {total} settled', waiting4file: 'Waiting for the session file…',
         invalidSession: 'The session URL is invalid.',
         readOnly: 'Read-only. Ask the agent to open this session’s board so you can answer.',
+        sessionChanged: 'This server now serves another session. Ask the agent to reopen this board.',
         warnUnreadable: 'The session file could not be read. Showing the last good state.',
         mdDecisions: 'Decisions', mdArchitecture: 'Architecture', mdOpen: 'Open questions',
         live: 'Live', references: 'References', yours: 'Yours', addNote: 'Add a note',
@@ -950,6 +951,7 @@
         progress: '{total} sorudan {done} tanesi kapandı', waiting4file: 'Oturum dosyası bekleniyor…',
         invalidSession: 'Oturum adresi geçersiz.',
         readOnly: 'Salt okunur. Yanıt verebilmek için ajandan bu oturumun panosunu açmasını isteyin.',
+        sessionChanged: 'Bu sunucu artık başka bir oturumu gösteriyor. Ajandan bu panoyu yeniden açmasını isteyin.',
         warnUnreadable: 'Oturum dosyası okunamadı. Son geçerli durum gösteriliyor.',
         mdDecisions: 'Kararlar', mdArchitecture: 'Mimari', mdOpen: 'Açık kalan sorular',
         live: 'Canlı', references: 'Referanslar', yours: 'Sizin', addNote: 'Not ekle',
@@ -1372,6 +1374,8 @@
     // HTTP reads remain available even when this board cannot write.
     const serverMode = /^https?:$/.test(window.location.protocol);
     let canWrite = false;
+    let serverSession = null;
+    let sessionChanged = false;
     let specCollapsed = window.innerWidth < 900;
     let manualOffsets = readOffsets();
     saveOffsets();
@@ -1430,8 +1434,8 @@
           row.querySelector('.pick-mark').hidden = !picked;
         }
         const editor = card.querySelector('.answer-editor');
-        if (editor) { if (editor.value !== answer.text) editor.value = answer.text; editor.readOnly = q.pending || sendingAnswers; growAnswer(editor); }
-        const accept = card.querySelector('.accept-recommendation'); if (accept) { accept.disabled = q.pending || sendingAnswers; accept.hidden = q.pending; }
+        if (editor) { if (editor.value !== answer.text) editor.value = answer.text; editor.readOnly = !canWrite || q.pending || sendingAnswers; growAnswer(editor); }
+        const accept = card.querySelector('.accept-recommendation'); if (accept) { accept.disabled = !canWrite || q.pending || sendingAnswers; accept.hidden = q.pending; }
       }
       renderRoundBar(); measureAndLayout();
     }
@@ -2070,7 +2074,7 @@
       progress.append(element('span', '', interpolate(labels.progress, { done: data.questionsByStatus.settled.length, total: data.questions.length })));
       const dot = element('span', 'live-dot changed'); dot.setAttribute('role', 'img'); dot.setAttribute('aria-label', labels.live); progress.append(dot);
       header.replaceChildren(titleLine, element('p', 'idea-text', data.idea), progress);
-      if (serverMode && !canWrite) header.append(element('p', 'read-only-notice', labels.readOnly));
+      if (serverMode && !canWrite) header.append(element('p', 'read-only-notice', sessionChanged ? labels.sessionChanged : labels.readOnly));
       renderSpec(data, labels); spec.scrollTop = scrollTop;
       renderToolbar(); updateSpec();
       world.setAttribute('role', 'tree'); world.setAttribute('aria-label', data.title || labels.idea);
@@ -2928,24 +2932,39 @@
     // Same-origin board API writes always carry the shared contract header.
     async function apiRequest(path, method, body, contentType) {
       if (!canWrite) throw new Error(currentLabels.needServer);
-      const headers = { 'X-Grill-Board': '1' };
+      const headers = { 'X-Grill-Board': '1', 'X-Grill-Session': encodeURIComponent(serverSession) };
       const options = { method, headers, cache: 'no-store', credentials: 'same-origin' };
       if (body !== undefined) {
         headers['Content-Type'] = contentType || 'application/json';
         options.body = contentType ? body : JSON.stringify(body);
       }
       const response = await fetch(new URL(path, serverBaseUrl), options);
+      if (response.status === 409) stopSession();
       let data;
       try { data = await response.json(); } catch (_) { throw new Error(response.statusText || String(response.status)); }
       if (!response.ok || !data || data.ok !== true) throw new Error(GrillSession.string(data && data.error) || response.statusText || String(response.status));
       return data;
     }
     async function detectServer() {
-      if (!serverMode || hasSessionParameter) return;
+      if (!serverMode || sessionChanged) return;
       try {
         const response = await fetch(new URL('api/ping', serverBaseUrl), { cache: 'no-store', credentials: 'same-origin' });
-        const data = await response.json(); canWrite = response.ok && data.ok === true && data.board === 1;
+        const data = await response.json();
+        if (sessionChanged) return;
+        const valid = response.ok && data.ok === true && data.board === 1 && typeof data.session === 'string';
+        if (serverSession !== null && (!valid || data.session !== serverSession)) { stopSession(); return; }
+        if (valid) serverSession = data.session;
+        canWrite = valid && !hasSessionParameter;
       } catch (_) { canWrite = false; }
+    }
+    function stopSession() {
+      sessionChanged = true; canWrite = false;
+      clearInterval(stepsTimer); stepsTimer = null;
+      renderRoundBar();
+      const notice = header.querySelector('.read-only-notice') || element('p', 'read-only-notice');
+      notice.textContent = currentLabels.sessionChanged; header.append(notice);
+      for (const editor of document.querySelectorAll('.answer-editor')) editor.readOnly = true;
+      for (const button of document.querySelectorAll('.accept-recommendation, .delete-ref, button.ref-note')) button.disabled = true;
     }
     function transferUrl(transfer) {
       const lines = GrillSession.string(transfer.getData('text/uri-list')).split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
@@ -3008,7 +3027,9 @@
       return new Promise(resolve => {
         window[globalName] = undefined;
         const script = element('script');
-        const address = new URL(url); address.searchParams.set('t', String(Date.now())); script.src = address.href;
+        const address = new URL(url); address.searchParams.set('t', String(Date.now()));
+        if (serverSession !== null) address.searchParams.set('grill-session', serverSession);
+        script.src = address.href;
         let finished = false;
         const timeout = setTimeout(() => finish(null), 3000);
         function finish(value) {
@@ -3038,7 +3059,11 @@
       loading = (async () => {
         do {
           reloadRequested = false;
+          await detectServer();
+          if (sessionChanged) return;
           const [session, user] = await Promise.all([readScript(sessionUrl, '__GRILL__'), readScript(userUrl, '__GRILL_USER__')]);
+          await detectServer();
+          if (sessionChanged) return;
           if (user) latestUser = user;
           if (session) { latestSession = session; failedReads = 0; warning.hidden = true; }
           else {
