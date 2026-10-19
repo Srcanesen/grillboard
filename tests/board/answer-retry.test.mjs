@@ -77,9 +77,9 @@ test('the same answers sent in a later acknowledged round get a new batch id', a
     await page.evaluate(`document.querySelector('[data-answer-option=a]').click(); sendRoundAnswers()`);
     await session({ ...data, answered: 'a1' });
     await page.evaluate(`document.querySelector('[data-answer-option=a]').click(); sendRoundAnswers()`);
-    const batches = (await user(root)).answers;
+    const stored = await user(root);
+    const batches = stored.answers;
     assert.deepEqual(batches.map(batch => batch.id), ['a1', 'a2']);
-    assert.equal(typeof batches[0].requestId, 'string');
-    assert.notEqual(batches[0].requestId, batches[1].requestId);
+    assert.deepEqual(Object.values(stored.answerRequests).sort(), ['a1', 'a2']);
   });
 });
