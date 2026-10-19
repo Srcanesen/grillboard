@@ -1,6 +1,7 @@
 """Server contracts and real HTTP/waiter entry points, using only stdlib."""
 
 from contextlib import redirect_stdout
+from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import io
 import importlib.util
@@ -70,6 +71,20 @@ class ReadUserTests(unittest.TestCase):
         self.write({"version": 1, "refs": [], "answers": [batch(1), batch(1)]})
         with self.assertRaises(ValueError):
             server.read_user(self.root)
+
+    def test_optional_answer_request_id(self):
+        answers = [batch(1), dict(batch(2), requestId="retry-1")]
+        self.write({"version": 1, "refs": [], "answers": answers})
+        self.assertEqual(server.read_user(self.root)["answers"], answers)
+
+    def test_invalid_or_duplicate_stored_request_id(self):
+        for answers in ([dict(batch(1), requestId=None)],
+                        [dict(batch(1), requestId="bad id")],
+                        [dict(batch(1), requestId="same"), dict(batch(2), requestId="same")]):
+            with self.subTest(answers=answers):
+                self.write({"version": 1, "refs": [], "answers": answers})
+                with self.assertRaises(ValueError):
+                    server.read_user(self.root)
 
     def test_low_counters_corrected(self):
         self.write({"version": 1, "refs": [{"id": "u7"}], "nextId": 2,
@@ -185,11 +200,12 @@ class EntryPointTests(unittest.TestCase):
     def tearDown(self):
         self.stop_processes()
 
-    def post(self, body=None, header=True):
+    def post(self, body=None, header=True, request_id=None):
         headers = {"Content-Type": "application/json"}
         if header:
             headers["X-Grill-Board"] = "1"
-        request = Request(self.url + "api/answers", method="POST", headers=headers,
+        path = "api/answers" + ("?requestId=" + quote(request_id, safe="") if request_id is not None else "")
+        request = Request(self.url + path, method="POST", headers=headers,
                           data=json.dumps(body if body is not None else {"items": [ITEM]}).encode())
         opener = build_opener(ProxyHandler({}))
         try:
@@ -271,6 +287,60 @@ class EntryPointTests(unittest.TestCase):
         self.assertEqual(data["answers"][0]["id"], "a1")
         self.assertEqual(data["answers"][0]["items"], [{"question": "q1", "option": "a", "text": ""}])
         self.assertEqual(data["answers"], [response["batch"]])
+
+    def test_request_id_retry_survives_restart_and_reaches_waiter_once(self):
+        body = {"items": [ITEM]}
+        status, original = self.post(body, request_id="retry-1")
+        self.assertEqual(status, 200)
+        before = (self.root / "user.js").read_bytes()
+        self.processes[0].terminate()
+        self.processes[0].communicate(timeout=3)
+        process = self.start("--serve", "--port", "0")
+        with selectors.DefaultSelector() as ready:
+            ready.register(process.stdout, selectors.EVENT_READ)
+            self.assertTrue(ready.select(timeout=5), "Restarted server did not start")
+        self.url = process.stdout.readline().strip()
+        self.assertEqual(self.post(body, request_id="retry-1"), (200, original))
+        self.assertEqual((self.root / "user.js").read_bytes(), before)
+        status, changed = self.post({"items": [dict(ITEM, text="Different")]}, request_id="retry-2")
+        self.assertEqual(status, 200)
+        self.assertEqual(changed["batch"]["id"], "a2")
+        self.assertEqual(server.read_user(self.root)["nextAnswerId"], 3)
+        waiter = self.start("--wait-answers")
+        output, errors = waiter.communicate(timeout=3)
+        self.assertEqual(waiter.returncode, 0, errors)
+        self.assertEqual(json.loads(output), {"answers": [original["batch"], changed["batch"]]})
+
+    def test_concurrent_request_id_retries_save_one_batch(self):
+        body = {"items": [ITEM]}
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(lambda _: self.post(body, request_id="concurrent-1"), range(8)))
+        self.assertEqual([status for status, _ in results], [200] * 8)
+        self.assertEqual([response["batch"]["id"] for _, response in results], ["a1"] * 8)
+        self.assertEqual(server.read_user(self.root)["answers"], [results[0][1]["batch"]])
+        self.assertEqual(server.read_user(self.root)["nextAnswerId"], 2)
+
+    def test_reused_request_id_with_different_answers_leaves_file_unchanged(self):
+        self.assertEqual(self.post({"items": [ITEM]}, request_id="same-id")[0], 200)
+        before = (self.root / "user.js").read_bytes()
+        status, response = self.post({"items": [dict(ITEM, text="Changed")]}, request_id="same-id")
+        self.assertEqual(status, 400)
+        self.assertEqual(response, {"ok": False, "error": "Request id already used for different answers"})
+        self.assertEqual((self.root / "user.js").read_bytes(), before)
+
+    def test_invalid_request_id_leaves_file_unchanged(self):
+        before = (self.root / "user.js").read_bytes()
+        for request_id in ("", "bad id", "x" * 81):
+            with self.subTest(request_id=request_id):
+                status, response = self.post({"items": [ITEM]}, request_id=request_id)
+                self.assertEqual(status, 400)
+                self.assertEqual(response, {"ok": False, "error": "Bad request id"})
+                self.assertEqual((self.root / "user.js").read_bytes(), before)
+
+    def test_legacy_answer_requests_still_create_separate_batches(self):
+        self.assertEqual(self.post()[1]["batch"]["id"], "a1")
+        self.assertEqual(self.post()[1]["batch"]["id"], "a2")
+        self.assertEqual([answer["items"] for answer in server.read_user(self.root)["answers"]], [[ITEM], [ITEM]])
 
     def test_large_frontier_persists_and_reaches_waiter(self):
         items = [dict(ITEM, question=f"q{i}") for i in range(1000)]

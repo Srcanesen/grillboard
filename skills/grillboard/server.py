@@ -25,6 +25,7 @@ PREFIX = "window.__GRILL_USER__ = "
 MAX_BODY = 15 * 1024 * 1024
 TARGET = re.compile(r"[A-Za-z0-9_-]{1,40}(:[A-Za-z0-9_-]{1,40})?")
 ANSWER_ID = re.compile(r"a([1-9][0-9]*)")
+REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
 ITEM_ID = re.compile(r"[A-Za-z0-9_-]{1,40}")
 REF_ID = re.compile(r"u([1-9][0-9]*)")
 IMAGES = {"image/png": "png", "image/jpeg": "jpg",
@@ -129,11 +130,18 @@ def read_user(root):
         raise ValueError("Invalid answers in user.js")
     highest = 0
     seen = set()
+    request_ids = set()
     for batch in answers:
         match = ANSWER_ID.fullmatch(batch.get("id", "")) if isinstance(batch, dict) and isinstance(batch.get("id"), str) else None
-        if (match is None or batch["id"] in seen or set(batch) != {"id", "sent", "items"}
+        if (match is None or batch["id"] in seen
+                or set(batch) not in ({"id", "sent", "items"}, {"id", "sent", "items", "requestId"})
                 or not isinstance(batch["sent"], str)):
             raise ValueError("Invalid answer batch in user.js")
+        if "requestId" in batch:
+            request_id = batch["requestId"]
+            if not isinstance(request_id, str) or not REQUEST_ID.fullmatch(request_id) or request_id in request_ids:
+                raise ValueError("Invalid answer request id in user.js")
+            request_ids.add(request_id)
         try:
             datetime.strptime(batch["sent"], "%Y-%m-%dT%H:%M:%SZ")
             validate_items(batch["items"])
@@ -314,14 +322,25 @@ class BoardHandler(BaseHTTPRequestHandler):
         if set(data) != {"items"}:
             raise RequestError(400, "Expected items only")
         items = validate_items(data["items"])
+        request_ids = parse_qs(self.path.partition("?")[2], keep_blank_values=True).get("requestId", [])
+        request_id = request_ids[0] if request_ids else None
+        if request_ids and (len(request_ids) != 1 or not REQUEST_ID.fullmatch(request_id)):
+            raise RequestError(400, "Bad request id")
         with self.server.user_lock:
             data = read_user(self.server.root)
-            batch = {"id": f"a{data['nextAnswerId']}",
-                     "sent": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                     "items": items}
-            data["nextAnswerId"] += 1
-            data["answers"].append(batch)
-            write_user(self.server.root, data)
+            batch = next((batch for batch in data["answers"] if batch.get("requestId") == request_id), None) if request_id else None
+            if batch is not None:
+                if batch["items"] != items:
+                    raise RequestError(400, "Request id already used for different answers")
+            else:
+                batch = {"id": f"a{data['nextAnswerId']}",
+                         "sent": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                         "items": items}
+                if request_id is not None:
+                    batch["requestId"] = request_id
+                data["nextAnswerId"] += 1
+                data["answers"].append(batch)
+                write_user(self.server.root, data)
         self.json_response(200, {"ok": True, "batch": batch})
 
     def add_ref(self):

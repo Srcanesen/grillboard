@@ -1356,6 +1356,7 @@
     let currentUserRefs = [];
     const answerDrafts = new Map();
     let sendingAnswers = false;
+    let answerRequest = null;
     let answerError = '';
     const roundBar = document.getElementById('round-bar');
     const variantObserver = new ResizeObserver(entries => {
@@ -1491,17 +1492,20 @@
     async function sendRoundAnswers() {
       if (!canWrite || sendingAnswers) return;
       const items = currentSession.questionsByStatus.asking.filter(q => !q.pending && GrillSession.hasAnswer(draftFor(q.id)))
-        .map(q => ({ question: q.id, ...draftFor(q.id) }));
+        .map(q => ({ question: q.id, ...draftFor(q.id) })).sort((a, b) => a.question.localeCompare(b.question));
       if (!items.length) return;
+      const json = JSON.stringify(items);
+      if (!answerRequest || answerRequest.json !== json) answerRequest = { json, requestId: crypto.randomUUID() };
       sendingAnswers = true; answerError = ''; refreshAnswerControls();
       try {
-        const result = await apiRequest('api/answers', 'POST', { items });
+        const result = await apiRequest('api/answers?requestId=' + answerRequest.requestId, 'POST', { items });
         await loadFiles();
         const user = GrillSession.object(latestUser);
         if (!GrillSession.array(user.answers).some(batch => batch.id === result.batch.id)) latestUser = { ...user, answers: GrillSession.array(user.answers).concat(result.batch) };
         // Sent drafts belong to this batch; advancing answered must expose a fresh input.
         for (const item of items) answerDrafts.delete(item.question);
         lastRenderedJson = null; renderLatest();
+        answerRequest = null;
       } catch (_) { answerError = currentLabels.answerFailed; }
       finally { sendingAnswers = false; refreshAnswerControls(); }
     }
