@@ -107,3 +107,46 @@ for (const operation of ['delete', 'disconnect']) test('a failed reference ' + o
     assert.equal((await user(root)).refs.length, operation === 'delete' ? 0 : 1);
   });
 });
+
+for (const state of ['typing', 'pending', 'failed']) test('new rounds render while a reference note is ' + state + ', preserving its text, focus and retry', async () => {
+  const initial = { lang: 'en', questions: [{ id: 'q1', title: 'First round', status: 'asking', options: [{ id: 'a', label: 'Files' }] }] };
+  await withBoard(initial, async ({ root, page, session }) => {
+    await reference(page, 'Existing note'); await page.type('Keep this draft');
+    await page.evaluate(`window.originalFetch = fetch; window.noteRequests = 0;
+      window.fetch = (input, options) => {
+        if (options?.method === 'POST' && new URL(input).pathname === '/api/refs/' + referenceId) {
+          noteRequests++;
+          return new Promise(resolve => { window.releaseNote = () => resolve(originalFetch(new URL('api/refs/missing', location.href), options)); });
+        }
+        return originalFetch(input, options);
+      };`);
+    if (state !== 'typing') {
+      await page.key('Enter');
+      await until(() => page.evaluate('!!window.releaseNote'), 'note request starts');
+      if (state === 'failed') {
+        await page.evaluate('releaseNote()');
+        await until(() => page.evaluate('!document.querySelector(".note-editor").readOnly'), 'failed save reopens editor');
+      }
+    }
+    await page.evaluate(`window.noteEditor = document.querySelector('.note-editor'); noteEditor.setSelectionRange(4, 8);`);
+    // Changing language also rebuilds the reference card, rather than merely reusing it.
+    await session({ ...initial, lang: 'tr', questions: [...initial.questions, { id: 'q2', title: 'Next round', status: 'asking' }] });
+    assert.equal(await page.evaluate('document.querySelector("[data-question-id=q2] h3")?.textContent'), 'Next round');
+    assert.deepEqual(await page.evaluate(`({ text: document.querySelector('.note-editor')?.value,
+      same: document.querySelector('.note-editor') === noteEditor, focused: document.activeElement === noteEditor,
+      selection: [noteEditor.selectionStart, noteEditor.selectionEnd], requests: noteRequests })`),
+    { text: 'Keep this draft', same: true, focused: true, selection: [4, 8], requests: state === 'typing' ? 0 : 1 });
+    if (state === 'pending') {
+      await page.evaluate('releaseNote()');
+      await until(() => page.evaluate('!noteEditor.readOnly'), 'pending note fails');
+    }
+    // Sending an answer while the failed draft remains must show the saved pending answer.
+    await page.evaluate(`document.querySelector('[data-answer-option=a]').click(); sendRoundAnswers()`);
+    assert.equal(await page.evaluate('document.querySelector("[data-question-id=q1]").classList.contains("pending")'), true);
+    assert.equal((await user(root)).answers.length, 1);
+    assert.equal(await page.evaluate('noteEditor.value'), 'Keep this draft');
+    await page.evaluate('window.fetch = originalFetch; noteEditor.focus()'); await page.key('Enter');
+    await until(() => page.evaluate('!document.querySelector(".note-editor")'), 'draft retry succeeds');
+    assert.equal((await user(root)).refs[0].note, 'Keep this draft');
+  });
+});

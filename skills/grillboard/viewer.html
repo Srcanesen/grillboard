@@ -1852,6 +1852,7 @@
     }
     function editNote(note, ref) {
       const editor = element('textarea', 'note-editor');
+      editor.noteButton = note;
       editor.value = ref.note; editor.maxLength = 2000; editor.setAttribute('aria-label', currentLabels.addNote);
       note.replaceWith(editor); measureAndLayout(); editor.focus({ preventScroll: true });
       let finished = false;
@@ -1859,20 +1860,20 @@
         if (finished) return;
         finished = true;
         const value = editor.value;
-        if (!save || value === ref.note) { editor.replaceWith(note); measureAndLayout(); renderLatest(); return; }
+        if (!save || value === ref.note) { editor.replaceWith(editor.noteButton); measureAndLayout(); renderLatest(); return; }
         editor.readOnly = true;
         try {
           await apiRequest('api/refs/' + encodeURIComponent(ref.id), 'POST', { note: value });
-          editor.replaceWith(note); measureAndLayout();
+          editor.replaceWith(editor.noteButton); measureAndLayout();
           await loadFiles();
         } catch (error) { finished = false; toast(currentLabels.noteFailed); }
         finally { editor.readOnly = false; }
       }
       editor.addEventListener('keydown', event => {
-        if (event.key === 'Escape') { event.preventDefault(); finish(false); note.focus({ preventScroll: true }); }
+        if (event.key === 'Escape') { event.preventDefault(); finish(false); editor.noteButton.focus({ preventScroll: true }); }
         if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); finish(true); }
       });
-      editor.addEventListener('blur', () => finish(true));
+      editor.addEventListener('blur', () => { if (!editor.restoring) finish(true); });
     }
     function openLightbox(ref) {
       enlargedSketch = null; lightbox.classList.remove('sketch-overlay');
@@ -2071,6 +2072,10 @@
       }
       const scrollTop = spec.scrollTop;
       const focused = document.activeElement;
+      // Card rebuilding must neither save a draft on blur nor block incoming rounds.
+      const noteEditors = [...world.querySelectorAll('.note-editor')].map(editor => ({ editor, id: editor.closest('.node').dataset.nodeId }));
+      for (const { editor } of noteEditors) editor.restoring = true;
+      const noteFocus = focused && focused.matches('.note-editor') ? { start: focused.selectionStart, end: focused.selectionEnd } : null;
       const answerFocus = focused && focused.matches('.answer-editor') ? { id: focused.dataset.answerQuestion, start: focused.selectionStart, end: focused.selectionEnd } : null;
       const radioFocus = focused && focused.matches('[data-answer-option]') ? { id: focused.closest('.question-card').dataset.questionId, option: focused.dataset.answerOption } : null;
       const focusId = focused && focused.closest('.node') && focused.closest('.node').dataset.nodeId;
@@ -2199,6 +2204,18 @@
           lightbox.setAttribute('aria-label', sketch.title || currentLabels.sketch);
           scaleEnlargedSketch();
         }
+      }
+      for (const { editor, id } of noteEditors) {
+        const node = nodeRecords.get(id)?.element;
+        if (node && !node.contains(editor)) {
+          const note = node.querySelector('.ref-note');
+          if (note) { editor.noteButton = note; note.replaceWith(editor); }
+          else node.append(editor);
+        }
+        editor.restoring = false;
+      }
+      if (noteFocus && focused.isConnected) {
+        focused.focus({ preventScroll: true }); focused.setSelectionRange(noteFocus.start, noteFocus.end);
       }
       refreshAnswerControls();
       for (const editor of world.querySelectorAll('.answer-editor')) growAnswer(editor);
@@ -3100,7 +3117,7 @@
       });
     }
     function renderLatest() {
-      if (!latestSession || gesture || pinch || connection || nodeResize || document.querySelector('.note-editor')) return;
+      if (!latestSession || gesture || pinch || connection || nodeResize) return;
       const json = JSON.stringify([latestSession, latestUser, canWrite, sessionChanged]);
       if (json === lastRenderedJson) return;
       render(latestSession, latestUser); lastRenderedJson = json; renderedCanWrite = canWrite;
