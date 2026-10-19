@@ -55,6 +55,7 @@
     .idea-text { margin: 10px 0 0; color: var(--muted); white-space: pre-wrap; }
     .progress { display: flex; align-items: center; justify-content: flex-end; gap: 10px; color: var(--muted); flex-shrink: 0; min-width: 0; max-width: 100%; padding-top: 6px; }
     .progress > span:first-child { min-width: 0; }
+    .read-only-notice { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
     .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
     .live-dot.changed { animation: live-pulse 650ms ease-out; }
 
@@ -916,6 +917,8 @@
         emptyArchitecture: 'No architecture notes yet.', emptyOpen: 'Nothing open.',
         copySpec: 'Copy spec', copied: 'Copied', done: 'Done',
         progress: '{done} of {total} settled', waiting4file: 'Waiting for the session file…',
+        invalidSession: 'The session URL is invalid.',
+        readOnly: 'Read-only. Ask the agent to open this session’s board so you can answer.',
         warnUnreadable: 'The session file could not be read. Showing the last good state.',
         mdDecisions: 'Decisions', mdArchitecture: 'Architecture', mdOpen: 'Open questions',
         live: 'Live', references: 'References', yours: 'Yours', addNote: 'Add a note',
@@ -943,6 +946,8 @@
         emptyArchitecture: 'Henüz mimari notu yok.', emptyOpen: 'Açık kalan soru yok.',
         copySpec: "Spec'i kopyala", copied: 'Kopyalandı', done: 'Bitti',
         progress: '{total} sorudan {done} tanesi kapandı', waiting4file: 'Oturum dosyası bekleniyor…',
+        invalidSession: 'Oturum adresi geçersiz.',
+        readOnly: 'Salt okunur. Yanıt verebilmek için ajandan bu oturumun panosunu açmasını isteyin.',
         warnUnreadable: 'Oturum dosyası okunamadı. Son geçerli durum gösteriliyor.',
         mdDecisions: 'Kararlar', mdArchitecture: 'Mimari', mdOpen: 'Açık kalan sorular',
         live: 'Canlı', references: 'Referanslar', yours: 'Sizin', addNote: 'Not ekle',
@@ -1273,15 +1278,24 @@
     const reader = document.getElementById('reader');
     const svgNamespace = 'http://www.w3.org/2000/svg';
     const ideaId = GrillSession.nodeId('idea');
-    const sessionParameter = new URLSearchParams(window.location.search).get('session');
-    let sessionUrl;
+    const hasSessionParameter = new URLSearchParams(window.location.search).has('session');
+    let sessionUrl = null;
     try {
-      const address = new URL(sessionParameter || 'session.js', window.location.href);
+      let source = 'session.js';
+      if (hasSessionParameter) {
+        const parameter = window.location.search.slice(1).split('&').find(part => new URLSearchParams(part).has('session'));
+        const separator = parameter.indexOf('=');
+        source = decodeURIComponent((separator < 0 ? '' : parameter.slice(separator + 1)).replace(/\+/g, ' ')) || source;
+      }
+      const address = new URL(source, window.location.href);
       if (!['file:', 'http:', 'https:'].includes(address.protocol) || address.origin !== window.location.origin) throw new Error('Invalid session URL');
+      // Resolve encoded separators so related reads stay beside the displayed session file.
+      if (address.protocol !== 'file:') address.pathname = address.pathname.replace(/%2f|%5c/gi, '/');
       sessionUrl = address.href;
     }
-    catch (_) { sessionUrl = new URL('session.js', window.location.href).href; }
-    const userUrl = new URL('user.js', sessionUrl).href;
+    catch (_) {}
+    const userUrl = sessionUrl && new URL('user.js', sessionUrl).href;
+    const serverBaseUrl = new URL('.', window.location.href);
     const storageKey = 'grill-board:' + window.location.pathname + sessionUrl;
     const panelWidthKey = 'grill-panel-width:' + window.location.pathname + sessionUrl;
     let panelWidth = readPanelWidth();
@@ -1327,7 +1341,9 @@
     }
     const openResearchPanels = new Set();
     const pendingDropPositions = new Map();
-    let serverMode = false;
+    // HTTP reads remain available even when this board cannot write.
+    const serverMode = /^https?:$/.test(window.location.protocol);
+    let canWrite = false;
     let specCollapsed = window.innerWidth < 900;
     let manualOffsets = readOffsets();
     saveOffsets();
@@ -1387,14 +1403,14 @@
       renderRoundBar(); measureAndLayout();
     }
     function chooseAnswer(question, option) {
-      if (sendingAnswers || currentSession.questionsById[question].pending) return;
+      if (!canWrite || sendingAnswers || currentSession.questionsById[question].pending) return;
       const answer = draftFor(question); answer.option = answer.option === option ? null : option;
       answerError = ''; recordInteraction(); refreshAnswerControls();
     }
     function renderRoundBar() {
       const asking = currentSession ? currentSession.questionsByStatus.asking : [];
       const open = asking.filter(q => !q.pending);
-      roundBar.hidden = !serverMode || !asking.length;
+      roundBar.hidden = !canWrite || !asking.length;
       roundBar.replaceChildren(); if (roundBar.hidden) return;
       if (currentSession.pendingCount) roundBar.append(element('div', 'round-message', currentLabels.answersSent));
       if (open.length) {
@@ -1422,7 +1438,7 @@
       updateFloatingControls();
     }
     async function sendRoundAnswers() {
-      if (sendingAnswers) return;
+      if (!canWrite || sendingAnswers) return;
       const items = currentSession.questionsByStatus.asking.filter(q => !q.pending && GrillSession.hasAnswer(draftFor(q.id)))
         .map(q => ({ question: q.id, ...draftFor(q.id) }));
       if (!items.length) return;
@@ -1454,7 +1470,7 @@
       const card = element('article', 'question-card ' + q.status);
       if (Object.prototype.hasOwnProperty.call(changes.highlights, q.id)) card.classList.add('highlight');
       const pending = q.pendingItem;
-      const editable = serverMode && q.status === 'asking' && !pending;
+      const editable = canWrite && q.status === 'asking' && !pending;
       const interactive = editable || !!pending;
       const answer = pending || (editable ? draftFor(q.id) : q.answer);
       if (pending) card.classList.add('pending');
@@ -1542,7 +1558,7 @@
               }, 'variant-open'));
               if (ref && ref.user) {
                 row.append(element('span', 'badge yours', labels.yours));
-                if (serverMode) addReferenceControls(row, ref);
+                if (canWrite) addReferenceControls(row, ref);
                 else if (ref.note) row.append(element('p', 'ref-note', ref.note));
               }
             }
@@ -1565,7 +1581,7 @@
           editor.readOnly = !!pending || sendingAnswers; editor.dataset.answerQuestion = q.id;
           editor.addEventListener('input', () => { draftFor(q.id).text = editor.value; growAnswer(editor); answerError = ''; renderRoundBar(); measureAndLayout(); });
           details.append(editor);
-          if (serverMode && q.status === 'asking' && !q.options.length && q.recommendation) details.append(button(labels.acceptRecommendation, labels.acceptRecommendation, () => {
+          if (editable && !q.options.length && q.recommendation) details.append(button(labels.acceptRecommendation, labels.acceptRecommendation, () => {
             draftFor(q.id).text = currentSession.questionsById[q.id].recommendation.slice(0, GrillSession.ANSWER_TEXT_MAX); refreshAnswerControls(); editor.focus({ preventScroll: true });
           }, 'accept-recommendation'));
         }
@@ -1747,7 +1763,7 @@
         card.append(open);
       }
       if (ref.user) card.append(element('span', 'badge yours', currentLabels.yours));
-      if (ref.user && serverMode) {
+      if (ref.user && canWrite) {
         addReferenceControls(card, ref);
         card.append(button('', currentLabels.connect, null, 'connector-handle'));
       }
@@ -1951,14 +1967,13 @@
       const previousLayout = graph;
       const firstRender = currentSession === null;
       function questionContent(q, data) {
-        const { pending, pendingItem, ...content } = q;
-        return [content, q.validDependencies.map(id => [id, data.questionsById[id].status]),
+        return [q, q.validDependencies.map(id => [id, data.questionsById[id].status]),
           expandedCards.has(q.id), q.research.map(note => openResearchPanels.has(note.id))];
       }
       // Disclosure controls already changed the mounted card since the last render.
       if (currentSession) for (const q of currentSession.questions) {
         const record = nodeRecords.get(q.id);
-        if (record) record.signature = JSON.stringify([questionContent(q, currentSession), currentLabels, labelLanguage(currentSession.lang), serverMode]);
+        if (record) record.signature = JSON.stringify([questionContent(q, currentSession), currentLabels, labelLanguage(currentSession.lang), canWrite]);
       }
       const scrollTop = spec.scrollTop;
       const focused = document.activeElement;
@@ -1991,6 +2006,7 @@
       progress.append(element('span', '', interpolate(labels.progress, { done: data.questionsByStatus.settled.length, total: data.questions.length })));
       const dot = element('span', 'live-dot changed'); dot.setAttribute('role', 'img'); dot.setAttribute('aria-label', labels.live); progress.append(dot);
       header.replaceChildren(titleLine, element('p', 'idea-text', data.idea), progress);
+      if (!canWrite) header.append(element('p', 'read-only-notice', labels.readOnly));
       renderSpec(data, labels); spec.scrollTop = scrollTop;
       renderToolbar(); updateSpec();
       world.setAttribute('role', 'tree'); world.setAttribute('aria-label', data.title || labels.idea);
@@ -2007,7 +2023,7 @@
       }
       for (const child of Array.from(world.children)) if (!child.classList.contains('node')) child.remove();
       function reuse(id, content, build, highlighted = false) {
-        const signature = JSON.stringify([content, labels, labelLanguage(data.lang), serverMode]);
+        const signature = JSON.stringify([content, labels, labelLanguage(data.lang), canWrite]);
         const previous = previousNodes.get(id);
         const node = previous && previous.signature === signature && !highlighted ? previous.element : build();
         if (previous && previous.element !== node) previous.element.remove();
@@ -2033,13 +2049,6 @@
         const highlighted = Object.prototype.hasOwnProperty.call(changes.highlights, q.id) || q.research.some(note => changes.changedResearch.includes(note.id));
         const card = reuse(q.id, questionContent(q, data),
           () => questionCard(q, labels, questionsById, changes), highlighted);
-        if (serverMode && q.status === 'asking') {
-          card.classList.toggle('pending', q.pending);
-          let badge = card.querySelector('.pending-badge');
-          if (q.pending && !badge) { badge = element('span', 'badge pending-badge', labels.sent); const badges = card.querySelector('.badges'); badges.insertBefore(badge, badges.querySelector('.reopened')); }
-          if (!q.pending && badge) badge.remove();
-          const accept = card.querySelector('.accept-recommendation'); if (accept) accept.hidden = q.pending;
-        }
         card.classList.toggle('unseen', unseenQuestions.has(q.id)); card.dataset.newLabel = labels.newQuestion;
         registerNode(q.id, card, { kind: 'question', validDependencies: q.validDependencies });
         cardNodes.set(q.id, card);
@@ -2656,7 +2665,7 @@
       if (event.button !== 0) return;
       if (event.target.closest('.connector-handle')) {
         const node = event.target.closest('.node'); const record = node && nodeRecords.get(node.dataset.nodeId);
-        if (!serverMode || !record || !record.ref || !record.ref.user) return;
+        if (!canWrite || !record || !record.ref || !record.ref.user) return;
         event.preventDefault(); cancelGlide(); recordInteraction(); canvas.setPointerCapture(event.pointerId);
         connection = { pointerId: event.pointerId, record, point: worldPoint(event.clientX, event.clientY), startX: event.clientX, startY: event.clientY, moved: false };
         scheduleLines(); return;
@@ -2668,7 +2677,7 @@
       if (touchPair().length >= 2) { recordInteraction(); beginPinch(); return; }
       const node = event.target.closest('.node');
       const inline = event.target.closest('[data-inline-ref]');
-      const inlineRef = inline && inline.classList.contains('tile-picture') && serverMode && refByNodeId(inline.dataset.inlineRef);
+      const inlineRef = inline && inline.classList.contains('tile-picture') && canWrite && refByNodeId(inline.dataset.inlineRef);
       const record = node && nodeRecords.get(node.dataset.nodeId);
       gesture = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: view.x, y: view.y,
         record, offsetX: record && manualOffsets[record.id] ? manualOffsets[record.id].dx : 0,
@@ -2710,7 +2719,7 @@
         const record = gesture.record;
         manualOffsets[record.id] = { dx: gesture.offsetX + dx / view.z, dy: gesture.offsetY + dy / view.z };
         applyOffsets(); scheduleLines();
-        if (record.ref && record.ref.user && serverMode) setDropTarget(connectionTargetAt(event.clientX, event.clientY, record.id));
+        if (record.ref && record.ref.user && canWrite) setDropTarget(connectionTargetAt(event.clientX, event.clientY, record.id));
       } else { view.x = gesture.x + dx; view.y = gesture.y + dy; applyView(); }
     });
     async function endPointer(event, canceled) {
@@ -2747,7 +2756,7 @@
           saveOffsets();
           const ref = ended.record.ref;
           const target = connectionTargetAt(event.clientX, event.clientY, ended.record.id);
-          if (!canceled && ref && ref.user && serverMode && (target || ended.inlineRef)) {
+          if (!canceled && ref && ref.user && canWrite && (target || ended.inlineRef)) {
             try {
               await updateReferenceTarget(ref, target);
             } catch (error) {
@@ -2810,24 +2819,25 @@
 
     // Same-origin board API writes always carry the shared contract header.
     async function apiRequest(path, method, body, contentType) {
+      if (!canWrite) throw new Error(currentLabels.needServer);
       const headers = { 'X-Grill-Board': '1' };
       const options = { method, headers, cache: 'no-store', credentials: 'same-origin' };
       if (body !== undefined) {
         headers['Content-Type'] = contentType || 'application/json';
         options.body = contentType ? body : JSON.stringify(body);
       }
-      const response = await fetch(new URL(path, window.location.href), options);
+      const response = await fetch(new URL(path, serverBaseUrl), options);
       let data;
       try { data = await response.json(); } catch (_) { throw new Error(response.statusText || String(response.status)); }
       if (!response.ok || !data || data.ok !== true) throw new Error(GrillSession.string(data && data.error) || response.statusText || String(response.status));
       return data;
     }
     async function detectServer() {
-      if (!/^https?:$/.test(window.location.protocol)) return;
+      if (!serverMode || hasSessionParameter) return;
       try {
-        const response = await fetch(new URL('api/ping', window.location.href), { cache: 'no-store', credentials: 'same-origin' });
-        const data = await response.json(); serverMode = response.ok && data.ok === true && data.board === 1;
-      } catch (_) { serverMode = false; }
+        const response = await fetch(new URL('api/ping', serverBaseUrl), { cache: 'no-store', credentials: 'same-origin' });
+        const data = await response.json(); canWrite = response.ok && data.ok === true && data.board === 1;
+      } catch (_) { canWrite = false; }
     }
     function transferUrl(transfer) {
       const lines = GrillSession.string(transfer.getData('text/uri-list')).split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
@@ -2859,7 +2869,7 @@
       const transfer = event.dataTransfer; if (!transfer) return;
       const files = Array.from(transfer.files || []), url = files.length ? '' : transferUrl(transfer);
       if (!files.length && !url) return;
-      if (!serverMode) { toast(currentLabels.needServer); return; }
+      if (!canWrite) { toast(currentLabels.needServer); return; }
       const target = questionAt(event.clientX, event.clientY), point = worldPoint(event.clientX, event.clientY);
       if (files.length) {
         for (let i = 0; i < files.length; i++) await addReference(files[i], '', target, target ? null : { x: point.x + i * 24, y: point.y + i * 24 });
@@ -2873,7 +2883,7 @@
       const url = files.length ? '' : GrillSession.singleWebUrl(transfer.getData('text/plain'));
       if (!files.length && !url) return;
       event.preventDefault();
-      if (!serverMode) { toast(currentLabels.needServer); return; }
+      if (!canWrite) { toast(currentLabels.needServer); return; }
       const target = selectedQuestion;
       if (files.length) { for (const file of files) await addReference(file, '', target, null); }
       else await addReference(null, url, target, null);
@@ -2936,7 +2946,8 @@
     window.addEventListener('pointermove', recordInteraction, { passive: true });
     applyView(); updateSpec();
     // The first render needs to know whether a server is behind the page: the round bar changes where the view lands.
-    detectServer().then(() => { loadFiles(); setInterval(() => loadFiles(false), 1000); });
+    if (sessionUrl) detectServer().then(() => { loadFiles(); setInterval(() => loadFiles(false), 1000); });
+    else { waiting.hidden = true; warning.textContent = currentLabels.invalidSession; warning.hidden = false; }
   </script>
 </body>
 </html>

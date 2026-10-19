@@ -1,6 +1,8 @@
 """Server contracts and real HTTP/waiter entry points, using only stdlib."""
 
+from contextlib import redirect_stdout
 import fcntl
+import io
 import importlib.util
 import json
 from pathlib import Path
@@ -11,6 +13,8 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
 
@@ -218,6 +222,40 @@ class EntryPointTests(unittest.TestCase):
         self.assertEqual(data["answers"][0]["id"], "a1")
         self.assertEqual(data["answers"][0]["items"], [{"question": "q1", "option": "a", "text": ""}])
         self.assertEqual(data["answers"], [response["batch"]])
+
+    def test_restart_saves_to_requested_session_when_old_port_is_reused(self):
+        crashed = self.processes[0]
+        crashed.kill()
+        crashed.communicate(timeout=3)
+        other = self.root / "other"
+        other.mkdir()
+        port = self.url.split(":")[2].rstrip("/")
+        self.assertGreater(int(port), 9000)
+        listener = subprocess.Popen(
+            [sys.executable, str(SERVER_PATH), str(other), "--serve", "--port", port],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.processes.append(listener)
+        with selectors.DefaultSelector() as ready:
+            ready.register(listener.stdout, selectors.EVENT_READ)
+            self.assertTrue(ready.select(timeout=5), "Other server did not start")
+        self.assertEqual(listener.stdout.readline().strip(), self.url)
+
+        # Keep handles to the real detached children so cleanup stops only our servers.
+        popen = subprocess.Popen
+        def tracked_start(*args, **kwargs):
+            process = popen(*args, **kwargs)
+            self.processes.append(process)
+            return process
+        output = io.StringIO()
+        with patch.object(server.subprocess, "Popen", tracked_start), redirect_stdout(output):
+            result = server.launch(self.root, SimpleNamespace(port=0, idle_minutes=30))
+        self.assertEqual(result, 0)
+        self.url = output.getvalue().strip()
+        self.assertGreater(int(self.url.split(":")[2].rstrip("/")), 9000)
+        self.assertEqual(self.post()[0], 200)
+        self.assertEqual([answer["items"] for answer in server.read_user(self.root)["answers"]],
+                         [[{"question": "q1", "option": "a", "text": ""}]])
+        self.assertEqual(server.read_user(other)["answers"], [])
 
     def test_missing_header_leaves_file_unchanged(self):
         before = (self.root / "user.js").read_bytes()

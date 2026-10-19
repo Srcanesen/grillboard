@@ -283,7 +283,7 @@ class BoardHandler(BaseHTTPRequestHandler):
             path = self.path.partition("?")[0]
             if self.is_api():
                 if path == "/api/ping" and self.command == "GET":
-                    self.json_response(200, {"ok": True, "board": 1})
+                    self.json_response(200, {"ok": True, "board": 1, "session": str(self.server.root)})
                 elif path == "/api/answers" and self.command == "POST":
                     self.add_answers()
                 elif path == "/api/refs" and self.command == "POST":
@@ -446,7 +446,8 @@ def live_url(root):
         opener = build_opener(ProxyHandler({}), NoRedirect())
         with opener.open(url + "api/ping", timeout=1) as response:
             data = json.loads(response.read(4096))
-            return url if isinstance(data, dict) and data.get("ok") is True else None
+            return url if (isinstance(data, dict) and data.get("ok") is True
+                           and data.get("board") == 1 and data.get("session") == str(root)) else None
     except (OSError, ValueError, KeyError, TypeError):
         return None
 
