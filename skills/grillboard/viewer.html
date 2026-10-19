@@ -1311,6 +1311,7 @@
     const panelWidthKey = 'grill-panel-width:' + window.location.pathname + sessionUrl;
     let panelWidth = readPanelWidth();
     const sketchNodes = new Map();
+    let sketchSessionJson = '', variantRevision = 0;
     let enlargedSketch = null;
     const researchSteps = new Map();
     let stepViews = new Map();
@@ -1474,7 +1475,7 @@
       if (!option.sketch || !safeSource(option.sketch)) return null;
       const url = new URL(option.sketch, sessionUrl), base = new URL('.', sessionUrl);
       if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname) || !/\.html?$/i.test(url.pathname)) return null;
-      return { id: q.id + ':' + option.id, title: option.label, src: option.sketch, width: option.width, height: option.height, rev: 0 };
+      return { id: q.id + ':' + option.id, title: option.label, src: option.sketch, width: option.width, height: option.height, rev: variantRevision };
     }
 
     // Questions lead each card; detail and research disclosure stay in memory.
@@ -1889,6 +1890,16 @@
       const frame = element('div', 'sketch-frame'); frame.append(surface);
       return { frame, surface, key: new URL(sketch.src, sessionUrl).href + '\n' + sketch.rev };
     }
+    function refreshSketchFrame(embedded, sketch) {
+      const key = new URL(sketch.src, sessionUrl).href + '\n' + sketch.rev;
+      if (!embedded || embedded.key !== key) {
+        const next = createSketchFrame(sketch);
+        if (embedded) embedded.frame.replaceWith(next.frame);
+        embedded = next;
+      }
+      embedded.sketch = sketch;
+      return embedded;
+    }
     function sizeSketchFrame(frame, surface, sketch, scale) {
       frame.style.width = sketch.width * scale + 'px'; frame.style.height = sketch.height * scale + 'px';
       surface.style.width = sketch.width + 'px'; surface.style.height = sketch.height + 'px';
@@ -1914,10 +1925,8 @@
         });
         entry = { node, caption, title, farTitle, viewport, stage, note, embedded: null }; sketchNodes.set(sketch.id, entry);
       }
-      const key = new URL(sketch.src, sessionUrl).href + '\n' + sketch.rev;
-      if (!entry.embedded || entry.embedded.key !== key) {
-        entry.embedded = createSketchFrame(sketch); entry.stage.replaceChildren(entry.embedded.frame);
-      }
+      entry.embedded = refreshSketchFrame(entry.embedded, sketch);
+      if (entry.embedded.frame.parentNode !== entry.stage) entry.stage.replaceChildren(entry.embedded.frame);
       entry.caption.textContent = currentLabels.sketch; entry.title.textContent = sketch.title;
       entry.title.title = sketch.title; entry.farTitle.textContent = sketch.title;
       entry.note.textContent = sketch.note; entry.note.hidden = !sketch.note;
@@ -2005,6 +2014,9 @@
       const radioFocus = focused && focused.matches('[data-answer-option]') ? { id: focused.closest('.question-card').dataset.questionId, option: focused.dataset.answerOption } : null;
       const focusId = focused && focused.closest('.node') && focused.closest('.node').dataset.nodeId;
       currentSession = GrillSession.model(session, user, { serverMode, baseUrl: sessionUrl });
+      // Variants have no revision field in the session contract: a changed session refreshes their files.
+      const sketchJson = JSON.stringify(session);
+      if (sketchJson !== sketchSessionJson) { sketchSessionJson = sketchJson; variantRevision++; }
       const changedData = JSON.stringify(previousSession) !== JSON.stringify(currentSession);
       const changes = GrillChanges.between(previousSession, currentSession, { idle: Date.now() - lastInteraction >= 10000 });
       previousSession = currentSession;
@@ -2104,7 +2116,29 @@
         const live = entries.filter(entry => entry.region.isConnected);
         if (live.length) stepViews.set(id, live); else stepViews.delete(id);
       }
-      for (const visual of world.querySelectorAll('.variant-preview')) variantObserver.observe(visual);
+      const variants = [];
+      for (const q of data.questions) for (const option of q.options) {
+        const sketch = variantSketch(q, option); if (sketch) variants.push(sketch);
+      }
+      for (const visual of world.querySelectorAll('.variant-preview')) {
+        const sketch = variants.find(sketch => sketch.id === visual.variant.sketch.id);
+        // Keep the object used by the option's open button current as well.
+        Object.assign(visual.variant.sketch, sketch);
+        visual.variant = refreshSketchFrame(visual.variant, visual.variant.sketch);
+        variantObserver.observe(visual);
+      }
+      if (enlargedSketch) {
+        const sketch = usableSketches().concat(variants).find(sketch => sketch.id === enlargedSketch.sketch.id);
+        if (!sketch) closeLightbox();
+        else {
+          const heading = enlargedSketch.heading;
+          enlargedSketch = { ...refreshSketchFrame(enlargedSketch, sketch), heading };
+          heading.querySelector('h2').textContent = sketch.title;
+          heading.querySelector('a').href = sketchUrl(sketch);
+          lightbox.setAttribute('aria-label', sketch.title || currentLabels.sketch);
+          scaleEnlargedSketch();
+        }
+      }
       refreshAnswerControls();
       for (const editor of world.querySelectorAll('.answer-editor')) growAnswer(editor);
       saveNodeSizes(); measureAndLayout(); selectQuestion(selectedQuestion);
