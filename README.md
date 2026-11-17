@@ -42,6 +42,17 @@ npx skills add Srcanesen/grillboard
 
 Add `-g` to install it for every project. This uses the open [`skills`](https://github.com/vercel-labs/skills) installer.
 
+### From the release zip
+
+Without Node.js or git: download `grillboard-<version>.zip` from the [latest release](https://github.com/Srcanesen/grillboard/releases/latest) and unzip it. Then, from the unzipped folder, copy the skill for every Claude Code project:
+
+```sh
+mkdir -p ~/.claude/skills
+cp -R grillboard ~/.claude/skills/
+```
+
+For just one project, copy it into that project's `.claude/skills/` instead. `INSTALL.txt` in the zip repeats these steps.
+
 ### Manual install
 
 Clone the repository:
@@ -145,6 +156,8 @@ The board may also load reference links to check whether they are images.
 Run the tests with `node --test tests/board/*.test.mjs` and `python3 -m unittest discover -s tests/server`. No packages need installing: the pure board tests load the script blocks of `viewer.html` (`grill-session`, `grill-camera`, `grill-layout` and `grill-changes`) in Node, and the server tests start `server.py` in a temporary folder. The browser tests also need Chrome or Chromium (set `CHROME_BIN` to its executable if needed); they run headlessly and skip with a reason when it is unavailable. `GLOSSARY.md` defines the project's words and `docs/adr/` records the decisions behind its shape.
 
 Run `python3 tools/record_demo.py` to rebuild `docs/demo.gif` and `docs/board.png`; it needs Python Playwright, installed Google Chrome and ffmpeg on `PATH`. Edit the `STAGES` list to change the replay; it uses a temporary sample copy and illustrative closing answers, then stops its server and removes the copy.
+
+Run `python3 tools/package_release.py` to write the release zip to `release/grillboard-<version>.zip`: the skill folder plus `INSTALL.txt`. The version is the newest git tag, or the first argument.
 
 ## Credits and license
 
