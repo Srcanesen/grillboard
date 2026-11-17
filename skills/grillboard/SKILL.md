@@ -65,7 +65,7 @@ Edit the changed questions in place; leave the rest of the file as it is.
 
 ## Sketch
 
-The **sketch** is a rough picture of the thing itself, redrawn as decisions settle, so the user sees the idea take shape instead of imagining it from text. The board hangs each sketch off the idea as a node.
+The **sketch** is a rough picture of the thing itself, redrawn as decisions settle, so the user sees the idea take shape instead of imagining it from text. Each sketch is attached to the idea. The board puts the working sketch beside the asking questions, to their right in top-down flow and below them in left-to-right flow. The user can minimize it to a chip and open it again on demand. Below 600 px the working sketch starts minimized. On those screens it opens at 280 px wide, reduced to the viewport width minus 24 px when that is smaller.
 
 - **Choose the picture that shows the idea**: the screens of a site or app, the panel of a plugin, a palette and type sample for a visual language, a box-and-arrow diagram for something with no screen. Several sketches are fine (one per page, say).
 - **Keep it a sketch**: plain boxes and real labels in the session's language, drawn as one self-contained HTML file with inline CSS and no scripts, under `.grill/<slug>/sketch/`. It is done when the user could point at any part and name the decision behind it.
@@ -184,7 +184,7 @@ window.__GRILL__ = {
 
 - `lang`: the session's language code. The board ships `en` and `tr`; for another language add a `labels` object (the keys are in the `LABELS` block at the top of `viewer.html`).
 - `answered`: the id of the last answer batch applied from `user.js` (`a1`, `a2`, …); empty or missing before any board answers. The server owns `user.js`: read it, never edit it.
-- `sketches`: `width` and `height` are the size the sketch opens at (390 × 760 for a phone screen, 1280 × 800 for a desktop one); the board scales it to fit, and the user can resize it from there.
+- `sketches`: `width` and `height` describe the sketch's authored viewport, such as 390 × 760 for a phone screen or 1280 × 800 for a desktop screen. The board scales it to fit and lets the user resize it.
 - `refs`: your references. `src` is a path under the session folder or a full URL; `caption` is optional.
 - `research`: the research notes. `target` is a question id, or empty for the whole board; `status` is `todo`, `running` or `done`; `finding`, `sources` and `report` (the path of the report file) stay empty until it is `done`.
 - `body`: the context of the question in a sentence or two. The board draws `options` itself, so keep them out of `body`.

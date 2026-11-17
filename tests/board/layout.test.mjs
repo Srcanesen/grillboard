@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { loadBlock } from './load-block.mjs';
 
 const layout = loadBlock('grill-layout', 'GrillLayout');
-const constants = { ideaWidth: 380, gapX: 28, gapY: 64, lrGapX: 96, lrGapY: 28 };
+const constants = { ideaWidth: 380, gapX: 28, gapY: 64, lrGapX: 96, lrGapY: 28, sketchRoundGap: 48 };
 const idea = { id: '@idea', kind: 'idea', width: 380, height: 80 };
 const question = (id, validDependencies = [], height = 100) => ({ id, kind: 'question', width: 300, height, validDependencies });
 const input = (nodes, options = {}) => ({ nodes: [idea, ...nodes], flow: 'td', constants, ...options });
@@ -24,6 +24,21 @@ test('two siblings keep the card gap and centre their parent', () => {
     '@idea': { x: -190, y: 0 }, q1: { x: -314, y: 144 }, q2: { x: 14, y: 144 },
   });
 });
+
+for (const [flow, expected] of [['td', { x: 362, y: 144 }], ['lr', { x: 476, y: 162 }]]) {
+  test(`the working sketch sits beside the asking cards in ${flow} at both sizes`, () => {
+    const id = 'sketch:main';
+    const options = { flow, workingSketch: { id, askingIds: ['q1', 'q2'] } };
+    for (const [width, height] of [[380, 760], [220, 40]]) {
+      const { positions, basePositions, parents } = layout.layout(input([
+        question('q1'), question('q2'), question('later', ['q1']), { id, kind: 'sketch', width, height }
+      ], options));
+      assert.deepEqual(positions[id], expected);
+      assert.deepEqual(basePositions[id], expected);
+      assert.equal(parents[id], '@idea');
+    }
+  });
+}
 
 test('a child follows its first valid dependency and keeps secondary links', () => {
   const result = layout.layout(input([question('q1'), question('q2'), question('q3', ['missing', 'q3', 'q2', 'q1'])]));
@@ -47,6 +62,20 @@ const attachments = [
   { id: 'ref:r1', kind: 'reference', width: 200, height: 60, anchorId: 'q1' },
   { id: 'ref:r2', kind: 'reference', width: 180, height: 70, anchorId: 'q1' },
 ];
+
+for (const [flow, expected, moved] of [
+  ['td', { x: 422, y: 144 }, { x: 598, y: 144 }],
+  ['lr', { x: 476, y: 312 }, { x: 446, y: 406 }],
+]) {
+  test(`the working sketch clears pinned references and report rows in ${flow}`, () => {
+    const id = 'sketch:main';
+    const options = { flow, workingSketch: { id, askingIds: ['q1'] },
+      manualOffsets: { 'report:s1': flow === 'td' ? { dx: 400, dy: 0 } : { dx: -30, dy: 260 } } };
+    const result = layout.layout(input([question('q1'), ...attachments, { id, kind: 'sketch', width: 380, height: 760 }], options));
+    assert.deepEqual(result.basePositions[id], expected);
+    assert.deepEqual(result.positions[id], moved);
+  });
+}
 
 test('top-down reports stack below the card and references beside it', () => {
   const result = layout.layout(input([question('q1'), ...attachments, question('q2', ['q1'])]));

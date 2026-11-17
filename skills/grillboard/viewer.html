@@ -186,12 +186,34 @@
     .spec-panel { display: flex; flex-direction: column; }
     #spec-content { min-height: 0; flex: 1; }
     /* Canvas sketches keep their live preview mounted while the tree changes. */
-    .sketch-card { background: transparent; border: 1px solid transparent; border-radius: var(--radius); box-shadow: none; padding: 10px; z-index: 1; }
+    .sketch-card { --sketch-control-zoom: min(1, var(--z, 1)); background: transparent; border: 1px solid transparent; border-radius: var(--radius); box-shadow: none; padding: 10px; z-index: 1; }
     /* The label row reserves room for a counter-scaled title without remeasuring. */
     .sketch-card-header { position: relative; display: flex; align-items: flex-end; gap: 8px; height: 45px; margin-bottom: 10px; font-size: 12px; white-space: nowrap; }
     .sketch-card-header .caption { flex-shrink: 0; }
     .sketch-viewport { flex-shrink: 0; color: var(--muted); font-size: 11px; }
     .sketch-card-header strong { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 15px; }
+    .sketch-toggle {
+      flex-shrink: 0; align-self: flex-start; min-width: calc(32px / var(--sketch-control-zoom));
+      min-height: calc(28px / var(--sketch-control-zoom)); padding: 0 calc(8px / var(--sketch-control-zoom));
+      font-size: calc(14px / var(--sketch-control-zoom)); background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-small);
+    }
+    .sketch-card.minimized {
+      padding: calc(6px / var(--sketch-control-zoom)) calc(8px / var(--sketch-control-zoom));
+      background: var(--card); border-color: var(--border); box-shadow: var(--shadow); cursor: pointer;
+    }
+    .sketch-card.minimized .sketch-card-header { height: auto; margin: 0; align-items: center; gap: calc(8px / var(--sketch-control-zoom)); }
+    .sketch-card.minimized .sketch-card-header strong { font-size: calc(15px / var(--sketch-control-zoom)); }
+    .sketch-card.minimized .sketch-toggle { min-width: calc(104px / var(--sketch-control-zoom)); }
+    .sketch-card.minimized .caption, .sketch-card.minimized .sketch-viewport, .sketch-card.minimized > .node-resize { display: none; }
+    .sketch-card.minimized.unseen { animation: unseen-pulse 1.5s ease-in-out infinite; }
+    .sketch-card.minimized.unseen::after {
+      content: attr(data-new-label); position: absolute; top: -1em; right: 8px; padding: .1em .8em; pointer-events: none;
+      border: 2px solid var(--card); border-radius: 999px; background: var(--accent); color: var(--on-accent);
+      font-size: max(12px, calc(11px / var(--z, 1))); font-weight: 700; white-space: nowrap;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .sketch-card.minimized.unseen { animation: none; }
+    }
     .sketch-card iframe, .sketch-card img { pointer-events: none; }
     .sketch-card-note { color: var(--muted); font-size: 12px; margin: 10px 0 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .sketch-frame { position: relative; flex: none; overflow: hidden; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--sketch-shadow); }
@@ -331,8 +353,10 @@
     #world.far .question-card.researching > .far-label { color: var(--amber); }
     #world.far .question-card.waiting > .far-label { color: var(--muted); }
     #world.far .report-card.stacked > :not(.node-resize) { visibility: hidden; }
-    #world.far .sketch-card-header > :not(.far-label), #world.far .sketch-card-note { visibility: hidden; }
-    #world.far .sketch-card-header > .far-label { display: block; padding: 0; white-space: nowrap; text-overflow: ellipsis; }
+    #world.far .sketch-card:not(.minimized) .sketch-card-header > :not(.far-label):not(.sketch-toggle),
+    #world.far .sketch-card-note { visibility: hidden; }
+    #world.far .sketch-card:not(.minimized) .sketch-card-header > .far-label { display: block; padding: 0; white-space: nowrap; text-overflow: ellipsis; }
+    #world.far .sketch-card-header:has(.sketch-toggle:not([hidden])) > .far-label { right: calc(36px / var(--sketch-control-zoom)); }
     @media (max-width: 899px) {
       .header { width: min(420px, calc(100vw - 32px)); padding: 10px 12px; }
       .header .title-line { flex-wrap: nowrap; gap: 8px; }
@@ -385,6 +409,7 @@
     .sketch-card-header .far-label { font-family: var(--font-display); }
     .idea-card > strong { font-size: 22px; line-height: 1.25; }
     .question-card.compact { background: var(--card); border: 1px solid var(--border); box-shadow: none; padding: 0; }
+
   </style>
 </head>
 <body>
@@ -590,7 +615,8 @@
   </script>
   <!-- The camera block is separate from the session block: it knows rectangles, not questions. -->
   <script id="grill-camera">
-    // focus(boxes, screen, { minimum }) -> { x, y, z }, keeping a fitting prefix at minimum .7 or .4.
+    // focus(boxes, screen, { minimum, maximum?, padding?, extra? }) -> { x, y, z }, keeping a fitting prefix.
+    // An extra box is kept only at the same or higher zoom. Its dimensions may be screen-sized.
     // isFar(z) -> boolean, whether the view uses the far presentation.
     // boxes: { x, y, width, height }[]; screen: { width, height, boardHidden,
     // header: { right, bottom }, toolbar: { right, top }, roundBar: { top } | null,
@@ -623,28 +649,35 @@
           result = target(visibleArea(screen, full, true));
           if (full && underHeader(result.kept, result.end, screen)) result = target(visibleArea(screen, false, true));
         }
-        return result.end;
+        return result;
       }
-      function fit(boxes, screen) {
+      function boxAtZoom(box, zoom) {
+        return box.screenSized ? { ...box, width: box.width / zoom, height: box.height / zoom } : box;
+      }
+      function fit(boxes, screen, { padding = 80 } = {}) {
         const left = Math.min(...boxes.map(node => node.x));
-        const right = Math.max(...boxes.map(node => node.x + node.width));
         const top = Math.min(...boxes.map(node => node.y)) - 28;
-        const bottom = Math.max(...boxes.map(node => node.y + node.height));
         return avoidControls(screen, area => {
-          const z = Math.min(1, Math.max(1, area.width - 80) / Math.max(1, right - left), Math.max(1, area.height - 80) / Math.max(1, bottom - top));
+          const limit = (distance, size, available, screenSized) =>
+            Math.max(1, available - padding - (screenSized ? size : 0)) / Math.max(1, distance + (screenSized ? 0 : size));
+          const z = Math.min(1, ...boxes.map(box => Math.min(
+            limit(box.x - left, box.width, area.width, box.screenSized),
+            limit(box.y - top, box.height, area.height, box.screenSized))));
+          const kept = boxes.map(box => boxAtZoom(box, z));
+          const right = Math.max(...kept.map(box => box.x + box.width));
+          const bottom = Math.max(...kept.map(box => box.y + box.height));
           const end = { x: area.x + area.width / 2 - (left + right) / 2 * z, y: area.y + area.height / 2 - (top + bottom) / 2 * z, z };
-          return { kept: boxes, end };
-        });
+          return { kept, end };
+        }).end;
       }
-      function focus(boxes, screen, options) {
-        const minimum = options.minimum;
+      function focusBoxes(boxes, screen, minimum, maximum, padding) {
         return avoidControls(screen, area => {
           const kept = boxes.slice();
           function bounds() {
             return { left: Math.min(...kept.map(node => node.x)), right: Math.max(...kept.map(node => node.x + node.width)),
               top: Math.min(...kept.map(node => node.y)), bottom: Math.max(...kept.map(node => node.y + node.height)) };
           }
-          function fit(box) { return Math.min(1, Math.max(1, area.width - 80) / Math.max(1, box.right - box.left), Math.max(1, area.height - 80) / Math.max(1, box.bottom - box.top)); }
+          function fit(box) { return Math.min(maximum, Math.max(1, area.width - padding) / Math.max(1, box.right - box.left), Math.max(1, area.height - padding) / Math.max(1, box.bottom - box.top)); }
           let box = bounds();
           const overflow = fit(box) < minimum;
           while (kept.length > 1 && fit(box) < minimum) { kept.pop(); box = bounds(); }
@@ -655,19 +688,34 @@
           return { kept, end: { x, y, z } };
         });
       }
-      return { fit, focus, isFar: z => z < .5 };
+      function focus(boxes, screen, { minimum, maximum = 1, padding = 80, extra }) {
+        const result = focusBoxes(boxes, screen, minimum, maximum, padding);
+        if (!extra) return result.end;
+        const withExtra = focusBoxes([...result.kept, boxAtZoom(extra, Math.min(1, result.end.z))], screen, result.end.z, maximum, padding);
+        return withExtra.kept.length > result.kept.length ? withExtra.end : result.end;
+      }
+      function showsHalf(box, screen, target) {
+        const area = visibleArea(screen, !underHeader([box], target, screen), underToolbar([box], target, screen));
+        const left = box.x * target.z + target.x, top = box.y * target.z + target.y;
+        const width = box.width * target.z, height = box.height * target.z;
+        const visibleWidth = Math.max(0, Math.min(left + width, area.x + area.width) - Math.max(left, area.x));
+        const visibleHeight = Math.max(0, Math.min(top + height, area.y + area.height) - Math.max(top, area.y));
+        return visibleWidth * visibleHeight >= width * height / 2;
+      }
+      return { fit, focus, showsHalf, isFar: z => z < .5 };
     })();
   </script>
   <!-- The layout block knows node kinds and sizes, not the page: sizes in, positions out. -->
   <script id="grill-layout">
-    // layout({ nodes, flow, constants, manualOffsets? }) -> read-only board placement; nodes carry id, kind, width, height, validDependencies?, anchorId?, parsedTarget?, noteId?.
+    // layout({ nodes, flow, constants, manualOffsets?, workingSketch? }) -> read-only board placement.
+    // workingSketch: { id, askingIds, position? }; position is a drag override in board coordinates.
     // cluster({ node, refs, reports, flow, manualOffsets? }) -> { width, height, positions, outputId } for one card and its attachments; node may carry x/y, reports may carry live x/y.
     // cluster positions include direct attachment offsets; outputId is the lowest card/report without a direct report offset.
     // motion(previous, current) -> { entering: [{ id, delay }], moving: [{ id, dx, dy }] }; delays are 60ms apart, capped at 360ms; dx/dy are old minus final positions.
     // A null previous layout skips motion; entering order is parents first, then left to right in td or top to bottom in lr.
     // Result fields: flow, positions/basePositions (id -> { x, y }, with/without inherited offsets), parents, secondary, clusters, levels, edges, boardRefs, boardResearch, boardRefX, researchCaptionY, boardReports, sketches.
     // Clusters/levels contain { id, width, height, cardWidth, cardHeight, refs, reports, children, depth, x, y, span, cardSpan, levelSize }; edges contain { from, to }; sketches contains ids.
-    // flow is 'td' or 'lr'; constants carry ideaWidth, gapX, gapY, lrGapX, lrGapY; manualOffsets maps ids to { dx, dy }; inputs are never changed.
+    // flow is 'td' or 'lr'; constants carry ideaWidth, gapX, gapY, lrGapX, lrGapY, sketchRoundGap; manualOffsets maps ids to { dx, dy }; inputs are never changed.
     const GrillLayout = (() => {
       function copy(value) {
         if (Array.isArray(value)) return value.map(copy);
@@ -707,7 +755,7 @@
         }
         return freeze({ width, height, positions, outputId });
       }
-      function layout({ nodes: inputNodes, flow, constants: LAYOUT, manualOffsets = {} }) {
+      function layout({ nodes: inputNodes, flow, constants: LAYOUT, manualOffsets = {}, workingSketch }) {
         const nodes = copy(inputNodes);
         const positions = Object.create(null), parents = Object.create(null), secondary = Object.create(null);
         const idea = nodes.find(node => node.kind === 'idea') || { id: '@idea', width: LAYOUT.ideaWidth, height: 80 };
@@ -794,22 +842,36 @@
           for (const child of item.refs.concat(item.reports)) parents[child.id] = item.id;
         }
         const sketches = nodes.filter(node => node.kind === 'sketch');
+        const working = sketches.find(sketch => sketch.id === workingSketch?.id);
+        const roundNodes = working ? workingSketch.askingIds.flatMap(id => {
+          const card = byId.get(id), item = items.get(id);
+          return card ? [card, ...item.refs, ...item.reports] : [];
+        }) : [];
+        const parkedSketches = roundNodes.length || (working && workingSketch.position) ? sketches.filter(sketch => sketch !== working) : sketches;
+        function besideRound() {
+          return flow === 'lr'
+            ? { x: Math.min(...roundNodes.map(node => positions[node.id].x)), y: Math.max(...roundNodes.map(node => positions[node.id].y + node.height)) + LAYOUT.sketchRoundGap }
+            : { x: Math.max(...roundNodes.map(node => positions[node.id].x + node.width)) + LAYOUT.sketchRoundGap, y: Math.min(...roundNodes.map(node => positions[node.id].y)) };
+        }
         const root = items.get(idea.id);
         if (flow === 'lr') {
-          const columnHeight = sketches.reduce((sum, sketch) => sum + sketch.height, 0) + Math.max(0, sketches.length - 1) * 24;
+          const columnHeight = parkedSketches.reduce((sum, sketch) => sum + sketch.height, 0) + Math.max(0, parkedSketches.length - 1) * 24;
           let sketchY = root.y + root.cardHeight / 2 - columnHeight / 2;
-          for (const sketch of sketches) {
-            positions[sketch.id] = { x: root.x - 56 - sketch.width, y: sketchY }; parents[sketch.id] = idea.id;
+          for (const sketch of parkedSketches) {
+            positions[sketch.id] = { x: root.x - 56 - sketch.width, y: sketchY };
             sketchY += sketch.height + 24;
           }
         } else {
-          const rowWidth = sketches.reduce((sum, sketch) => sum + sketch.width, 0) + Math.max(0, sketches.length - 1) * 24;
+          const rowWidth = parkedSketches.reduce((sum, sketch) => sum + sketch.width, 0) + Math.max(0, parkedSketches.length - 1) * 24;
           let sketchX = root.x + root.cardWidth / 2 - rowWidth / 2;
-          for (const sketch of sketches) {
-            positions[sketch.id] = { x: sketchX, y: root.y - 56 - sketch.height }; parents[sketch.id] = idea.id;
+          for (const sketch of parkedSketches) {
+            positions[sketch.id] = { x: sketchX, y: root.y - 56 - sketch.height };
             sketchX += sketch.width + 24;
           }
         }
+        for (const sketch of sketches) parents[sketch.id] = idea.id;
+        if (roundNodes.length) positions[working.id] = besideRound();
+        else if (working && workingSketch.position) positions[working.id] = copy(workingSketch.position);
         const boardRefs = refs.filter(ref => !positions[ref.id]);
         const boardResearch = nodes.filter(node => node.kind === 'research' && !byId.has(node.parsedTarget?.questionId));
         const boardReports = reports.filter(report => !positions[report.id]);
@@ -840,6 +902,8 @@
           }
           point.x += dx; point.y += dy;
         }
+        if (working && workingSketch.position) positions[working.id] = copy(workingSketch.position);
+        else if (roundNodes.length) positions[working.id] = besideRound();
         return freeze({ flow, positions, basePositions, parents, secondary, clusters, levels, edges, boardRefs, boardResearch, boardRefX, researchCaptionY, boardReports, sketches: sketches.map(node => node.id) });
       }
 
@@ -932,6 +996,27 @@
       return { between };
     })();
   </script>
+  <script id="grill-working-sketch">
+    const GrillWorkingSketch = (() => {
+      function observeSketches(sketches, previous) {
+        const byId = new Map(sketches.map(sketch => [sketch.id, sketch]));
+        const candidates = sketches.filter(sketch => byId.get(sketch.id) === sketch);
+        const changed = previous ? candidates.filter(sketch =>
+          !Object.prototype.hasOwnProperty.call(previous.revisions, sketch.id) || sketch.rev !== previous.revisions[sketch.id]) : [];
+        changed.reverse().sort((a, b) => b.rev - a.rev);
+        const history = previous?.order || (previous?.id != null ? [previous.id] : []);
+        const order = [...new Set(changed.map(sketch => sketch.id).concat(history))].filter(id => byId.has(id));
+        const sketch = byId.get(order[0]) || candidates.reduce((best, item) => !best || item.rev >= best.rev ? item : best, null);
+        const revisions = Object.fromEntries(candidates.map(item => [item.id, item.rev]));
+        return { sketch, observation: byId.size ? { order, revisions } : null };
+      }
+      function roundKey(asking) {
+        if (!asking.length) return null;
+        return asking.every(q => q.round !== '') ? Math.max(...asking.map(q => q.round)) : JSON.stringify(asking.map(q => q.id).sort());
+      }
+      return { observeSketches, roundKey };
+    })();
+  </script>
   <script>
     // UI labels, including Markdown headings.
     const LABELS = {
@@ -963,7 +1048,7 @@
         focusRound: 'Go to the current round', toolbar: 'Board controls', research: 'Research',
         researchTodo: 'To research', researchRunning: 'Researching', researchDone: 'Researched',
         researchFindings: 'Research findings', toResearch: 'To research', mdResearch: 'Research', mdToResearch: 'To research', qPrefix: 'Q', alsoDependsOn: 'Also depends on {ids}',
-        expand: 'Show details', collapse: 'Hide details', connect: 'Connect to a card', disconnect: 'Disconnect', sketch: 'Sketch', resize: 'Resize', viewportSize: '{width} × {height}', openSketch: 'Open in a new tab', report: 'Research report', sourceCount: '{count} sources', loading: 'Loading…', truncated: 'Report truncated at 400,000 characters.', readReport: 'Read the report', mdSketches: 'Sketches'
+        expand: 'Show details', collapse: 'Hide details', connect: 'Connect to a card', disconnect: 'Disconnect', sketch: 'Sketch', resize: 'Resize', viewportSize: '{width} × {height}', openSketch: 'Open in a new tab', minimizeSketch: 'Minimize sketch', restoreSketch: 'Open sketch', report: 'Research report', sourceCount: '{count} sources', loading: 'Loading…', truncated: 'Report truncated at 400,000 characters.', readReport: 'Read the report', mdSketches: 'Sketches'
       },
       tr: {
         flowTd: 'Akış: yukarıdan aşağı. Soldan sağa çevir.', flowLr: 'Akış: soldan sağa. Yukarıdan aşağı çevir.',
@@ -993,7 +1078,7 @@
         focusRound: 'Güncel tura git', toolbar: 'Pano denetimleri', research: 'Araştırma',
         researchTodo: 'Araştırılacak', researchRunning: 'Araştırılıyor', researchDone: 'Araştırıldı',
         researchFindings: 'Araştırma bulguları', toResearch: 'Araştırılacaklar', mdResearch: 'Araştırma', mdToResearch: 'Araştırılacaklar', qPrefix: 'S', alsoDependsOn: '{ids} ile de bağlantılı',
-        expand: 'Ayrıntıları göster', collapse: 'Ayrıntıları gizle', connect: 'Bir karta bağla', disconnect: 'Bağlantıyı kes', sketch: 'Taslak', resize: 'Boyutlandır', viewportSize: '{width} × {height}', openSketch: 'Yeni sekmede aç', report: 'Araştırma raporu', sourceCount: '{count} kaynak', loading: 'Yükleniyor…', truncated: 'Rapor 400.000 karakterde kesildi.', readReport: 'Raporu oku', mdSketches: 'Taslaklar'
+        expand: 'Ayrıntıları göster', collapse: 'Ayrıntıları gizle', connect: 'Bir karta bağla', disconnect: 'Bağlantıyı kes', sketch: 'Taslak', resize: 'Boyutlandır', viewportSize: '{width} × {height}', openSketch: 'Yeni sekmede aç', minimizeSketch: 'Taslağı küçült', restoreSketch: 'Taslağı aç', report: 'Araştırma raporu', sourceCount: '{count} kaynak', loading: 'Yükleniyor…', truncated: 'Rapor 400.000 karakterde kesildi.', readReport: 'Raporu oku', mdSketches: 'Taslaklar'
       }
     };
 
@@ -1004,7 +1089,9 @@
 
     const LAYOUT = {
       sketchWidth: { portrait: 380, landscape: 720 }, questionWidth: 300, ideaWidth: 380,
-      gapX: 28, gapY: 64, lrGapX: 96, lrGapY: 28
+      gapX: 28, gapY: 64, lrGapX: 96, lrGapY: 28,
+      sketchRoundGap: 48, sketchChipWidth: 220, sketchChipHeight: 42, sketchPhoneWidth: 600, sketchOpenWidth: 280,
+      sketchFocusPadding: 24
     };
 
     function sourceTitle(source) { return source.title || new URL(source.url).hostname; }
@@ -1361,9 +1448,12 @@
     catch (_) {}
     const userUrl = sessionUrl && new URL('user.js', sessionUrl).href;
     const serverBaseUrl = new URL('.', window.location.href);
-    let storageKey = null, panelWidthKey = null, sizesKey = null;
+    let storageKey = null, panelWidthKey = null, sizesKey = null, sketchStateKey = null;
     let panelWidth = null;
     const sketchNodes = new Map();
+    const sketchState = Object.create(null);
+    let sketchObservation = null;
+    let workingSketch = null, workingRound = null, workingSketchDrag = null;
     let sketchSessionJson = '';
     let enlargedSketch = null;
     const researchSteps = new Map();
@@ -1436,7 +1526,13 @@
       if (storageKey || !session) return;
       const identity = JSON.stringify(geometryIdentity(session));
       storageKey = 'grill-board:' + identity; panelWidthKey = 'grill-panel-width:' + identity; sizesKey = 'grill-node-sizes:' + identity;
-      manualOffsets = readOffsets(); nodeSizes = readNodeSizes(); panelWidth = readPanelWidth();
+      sketchStateKey = 'grill-sketch-state:' + identity;
+      try {
+        const saved = GrillSession.object(JSON.parse(localStorage.getItem(sketchStateKey)));
+        Object.assign(sketchState, GrillSession.object(saved.sketches));
+        if (saved.observation?.revisions) sketchObservation = saved.observation;
+      } catch (_) {}
+      manualOffsets = readOffsets(); nodeSizes = readNodeSizes(); panelWidth = readPanelWidth(); workingSketchDrag = readWorkingSketchDrag();
     }
     function offsetsKey() { return storageKey + ':' + flow; }
     function readOffsets() {
@@ -1448,7 +1544,31 @@
         return positions;
       } catch (_) { return Object.create(null); }
     }
-    function saveOffsets() { if (!storageKey) return; try { localStorage.setItem(offsetsKey(), JSON.stringify(manualOffsets)); } catch (_) {} }
+    function readWorkingSketchDrag() {
+      if (!storageKey) return null;
+      try {
+        const saved = JSON.parse(localStorage.getItem(offsetsKey() + ':working-sketch'));
+        if (typeof saved?.id === 'string' && Number.isFinite(saved.position?.x) && Number.isFinite(saved.position?.y)) return saved;
+      } catch (_) {}
+      return null;
+    }
+    function saveOffsets() {
+      if (!storageKey) return;
+      try {
+        localStorage.setItem(offsetsKey(), JSON.stringify(manualOffsets));
+        const key = offsetsKey() + ':working-sketch';
+        if (workingSketchDrag) localStorage.setItem(key, JSON.stringify(workingSketchDrag));
+        else localStorage.removeItem(key);
+      } catch (_) {}
+    }
+    function saveSketchState(sketch, minimized) {
+      sketchState[sketch.id] = { minimized, seenRev: sketch.rev };
+      saveSketchPreferences();
+    }
+    function saveSketchPreferences() {
+      try { localStorage.setItem(sketchStateKey, JSON.stringify({ sketches: sketchState, observation: sketchObservation })); } catch (_) {}
+    }
+    function sketchOnPhone() { return window.innerWidth < LAYOUT.sketchPhoneWidth; }
     function reducedMotion() { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
     function button(text, label, callback, className) {
       const node = element('button', className || '', text);
@@ -1676,7 +1796,7 @@
           const editor = element('textarea', 'answer-editor'); editor.rows = 1; editor.maxLength = GrillSession.ANSWER_TEXT_MAX;
           editor.value = answer.text; editor.placeholder = labels.ownAnswer; editor.setAttribute('aria-label', labels.ownAnswer);
           editor.readOnly = !!pending || sendingAnswers; editor.dataset.answerQuestion = q.id;
-          editor.addEventListener('input', () => { draftFor(q.id).text = editor.value; growAnswer(editor); answerError = ''; renderRoundBar(); measureAndLayout(); });
+          editor.addEventListener('input', () => { recordInteraction(); draftFor(q.id).text = editor.value; growAnswer(editor); answerError = ''; renderRoundBar(); measureAndLayout(); });
           details.append(editor);
           if (editable && !q.options.length && q.recommendation) details.append(button(labels.acceptRecommendation, labels.acceptRecommendation, () => {
             draftFor(q.id).text = currentSession.questionsById[q.id].recommendation.slice(0, GrillSession.ANSWER_TEXT_MAX); refreshAnswerControls(); editor.focus({ preventScroll: true });
@@ -2022,23 +2142,65 @@
         const row = element('div', 'sketch-card-header');
         const caption = element('span', 'caption'); const title = element('strong');
         const farTitle = farLabel(sketch.title); const viewport = element('span', 'sketch-viewport');
-        row.append(caption, title, viewport, farTitle);
+        const toggle = button('', '', () => toggleWorkingSketch(sketch.nodeId), 'sketch-toggle');
+        toggle.addEventListener('focus', () => {
+          const box = toggle.getBoundingClientRect();
+          const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+          if (!toggle.contains(hit)) {
+            const record = nodeRecords.get(sketch.nodeId);
+            if (record?.minimized) focusSketchChip(record, false);
+            else focusView(false, [sketch.nodeId]);
+          }
+        });
+        row.append(caption, title, viewport, farTitle, toggle);
         const note = element('p', 'sketch-card-note');
         const stage = element('div'); node.append(row, stage, note);
         node.addEventListener('keydown', event => {
-          if (event.key === 'Enter' && event.target === node) { event.preventDefault(); openEnlargedSketch(sketch.id); }
+          if (event.key === 'Enter' && event.target === node) { event.preventDefault(); activateSketch(sketch.nodeId); }
         });
-        entry = { node, caption, title, farTitle, viewport, stage, note, embedded: null }; sketchNodes.set(sketch.id, entry);
+        entry = { node, caption, title, farTitle, viewport, stage, note, toggle, embedded: null }; sketchNodes.set(sketch.id, entry);
       }
       entry.embedded = refreshSketchFrame(entry.embedded, sketch);
       if (entry.embedded.frame.parentNode !== entry.stage) entry.stage.replaceChildren(entry.embedded.frame);
-      entry.caption.textContent = currentLabels.sketch; entry.title.textContent = sketch.title;
-      entry.title.title = sketch.title; entry.farTitle.textContent = sketch.title;
-      entry.note.textContent = sketch.note; entry.note.hidden = !sketch.note;
+      const title = sketch.title || currentLabels.sketch;
+      entry.caption.textContent = currentLabels.sketch; entry.title.textContent = title;
+      entry.title.title = title; entry.farTitle.textContent = title;
+      entry.note.textContent = sketch.note;
       if (Object.prototype.hasOwnProperty.call(changes.highlights, sketch.nodeId)) {
         entry.node.classList.remove('highlight'); void entry.node.offsetWidth; entry.node.classList.add('highlight');
       }
       registerNode(GrillSession.nodeId('sketch', sketch.id), entry.node, { kind: 'sketch', sketch });
+    }
+    function syncWorkingSketch() {
+      const round = GrillWorkingSketch.roundKey(currentSession.questionsByStatus.asking);
+      if (round !== null) {
+        workingRound = round;
+        if (workingSketchDrag && workingSketchDrag.round !== round) workingSketchDrag = null;
+      }
+      const { sketch, observation } = GrillWorkingSketch.observeSketches(usableSketches(), sketchObservation);
+      const observedChange = JSON.stringify(observation) !== JSON.stringify(sketchObservation);
+      workingSketch = sketch; sketchObservation = observation;
+      if (sketch) {
+        const saved = sketchState[sketch.id];
+        if (typeof saved?.minimized !== 'boolean' || !Number.isFinite(saved.seenRev)) { saveSketchState(sketch, sketchOnPhone()); return; }
+        if (!saved.minimized && saved.seenRev !== sketch.rev) { saveSketchState(sketch, false); return; }
+      }
+      if (observedChange) saveSketchPreferences();
+    }
+    function activateSketch(nodeId) {
+      const record = nodeRecords.get(nodeId);
+      if (record.minimized) toggleWorkingSketch(nodeId);
+      else openEnlargedSketch(record.sketch.id);
+    }
+    function toggleWorkingSketch(nodeId) {
+      if (nodeId !== workingSketch?.nodeId) return;
+      const record = nodeRecords.get(nodeId);
+      recordInteraction(); cancelGlide(); saveSketchState(workingSketch, !record.minimized);
+      applyNodeSize(record); measureAndLayout();
+      if (!record.minimized) {
+        if (sketchOnPhone()) focusOpenSketch(record, true);
+        else focusView(true, [nodeId]);
+      }
     }
 
     // A saved panel width is independent of the tree's stored offsets.
@@ -2128,6 +2290,7 @@
       sketchSessionJson = JSON.stringify(session);
       const changedData = JSON.stringify(previousSession) !== JSON.stringify(currentSession);
       const changes = GrillChanges.between(previousSession, currentSession, { idle: Date.now() - lastInteraction >= 10000 });
+      syncWorkingSketch();
       previousSession = currentSession;
       currentUserRefs = currentSession.userRefs;
       currentLabels = sessionLabels(currentSession);
@@ -2282,10 +2445,19 @@
       renderRoundBar();
       syncResearchSteps();
       if (changedData) startMotion(GrillLayout.motion(previousLayout, graph));
-      if (firstRender) focusView(false);
+      const sketch = nodeRecords.get(workingSketch?.nodeId);
+      if (firstRender) focusView(false, undefined, { includeSketch: false });
       else if (changes.viewTarget) {
-        if (changes.viewTarget.kind === 'questions') focusView(true);
-        else focusView(true, changes.viewTarget.nodeIds);
+        const { kind, nodeIds } = changes.viewTarget;
+        const targetsWorkingSketch = kind === 'sketches' && sketch && nodeIds.includes(sketch.id);
+        if (targetsWorkingSketch && sketch.minimized) {
+          if (changes.highlights[sketch.id].includes('sketch-added')) {
+            const activeId = [focusId, selectedQuestion].find(id => currentSession.questionsById[id]?.status === 'asking');
+            const activeCard = nodeRecords.get(activeId);
+            focusView(true, activeCard ? [activeId] : undefined, { keepVisible: activeCard });
+          }
+        } else if (kind === 'questions' || (targetsWorkingSketch && asking.size)) focusView(true);
+        else focusView(true, nodeIds);
       }
     }
     function registerNode(id, node, metadata) {
@@ -2349,8 +2521,23 @@
       const saved = Object.prototype.hasOwnProperty.call(nodeSizes, record.id);
       if (record.kind === 'sketch') {
         const entry = sketchNodes.get(record.sketch.id), size = sketchSize(record);
+        const state = record.id === workingSketch?.nodeId ? sketchState[record.sketch.id] : null;
+        record.minimized = Boolean(state?.minimized);
+        record.element.classList.toggle('minimized', record.minimized);
+        record.element.classList.toggle('unseen', record.minimized && record.sketch.rev > state.seenRev);
+        record.element.dataset.newLabel = currentLabels.newQuestion;
+        if (record.minimized) record.element.classList.remove('highlight');
+        entry.stage.hidden = record.minimized; entry.note.hidden = record.minimized || !record.sketch.note;
+        entry.toggle.hidden = !state;
+        const label = record.minimized ? currentLabels.restoreSketch : currentLabels.minimizeSketch;
+        entry.toggle.textContent = record.minimized ? label : '−';
+        entry.toggle.title = label; entry.toggle.setAttribute('aria-label', label);
+        entry.toggle.setAttribute('aria-expanded', String(!record.minimized));
         if (saved) nodeSizes[record.id] = size;
-        record.element.style.width = size.width * size.scale + 22 + 'px';
+        record.element.style.width = record.minimized
+          ? 'calc(min(' + LAYOUT.sketchChipWidth + 'px, 100vw - ' + LAYOUT.sketchFocusPadding + 'px) / var(--sketch-control-zoom))'
+          : size.width * size.scale + 22 + 'px';
+        record.element.style.height = record.minimized ? 'calc(' + LAYOUT.sketchChipHeight + 'px / var(--sketch-control-zoom))' : '';
         sizeSketchFrame(entry.embedded.frame, entry.embedded.surface, { ...record.sketch, width: size.width, height: size.height }, size.scale);
         entry.viewport.textContent = interpolate(currentLabels.viewportSize, { width: Math.round(size.width), height: Math.round(size.height) });
         entry.viewport.hidden = !(nodeResize && nodeResize.record.id === record.id) && size.width === record.sketch.width && size.height === record.sketch.height;
@@ -2472,6 +2659,14 @@
       }
     }
     let layoutNodes = [];
+    function layoutBoard(offsets) {
+      const sketch = workingSketch && {
+        id: workingSketch.nodeId, askingIds: currentSession.questionsByStatus.asking.map(q => q.id),
+        position: workingSketchDrag?.id === workingSketch.nodeId &&
+          (workingRound === null || workingSketchDrag.round === workingRound) ? workingSketchDrag.position : null
+      };
+      return GrillLayout.layout({ nodes: layoutNodes, flow, constants: LAYOUT, manualOffsets: offsets, workingSketch: sketch });
+    }
     function measureAndLayout() {
       if (!currentSession) return;
       finishMotion();
@@ -2483,7 +2678,7 @@
           validDependencies: record.validDependencies || [], anchorId: record.anchorId || '', parsedTarget: record.parsedTarget || { questionId: '', optionId: '' }, noteId: record.noteId || '' });
       }
       layoutNodes = sizes;
-      graph = GrillLayout.layout({ nodes: layoutNodes, flow, constants: LAYOUT });
+      graph = layoutBoard();
       for (const [id, point] of pendingDropPositions) {
         const base = graph.basePositions[id];
         if (base) { manualOffsets[id] = { dx: point.x - base.x, dy: point.y - base.y }; pendingDropPositions.delete(id); saveOffsets(); }
@@ -2518,7 +2713,7 @@
     function applyOffsets() {
       finishMotion();
       if (!graph) return;
-      graph = GrillLayout.layout({ nodes: layoutNodes, flow, constants: LAYOUT, manualOffsets });
+      graph = layoutBoard(manualOffsets);
       for (const record of nodeRecords.values()) {
         const point = graph.positions[record.id];
         if (point) { record.x = point.x; record.y = point.y; placeNode(record); }
@@ -2660,7 +2855,14 @@
       for (const id of graph.sketches) {
         const parent = nodeRecords.get(ideaId), child = nodeRecords.get(id);
         if (!parent || !child) continue;
-        const start = endpoint(parent, sketchOut), end = endpoint(child, sketchIn);
+        let start = endpoint(parent, sketchOut), end = endpoint(child, sketchIn);
+        if (id === workingSketch?.nodeId) {
+          const from = endpoint(parent, ''), to = endpoint(child, '');
+          const dx = to.x - from.x, dy = to.y - from.y;
+          const edges = Math.abs(dx) > Math.abs(dy) ? ['left', 'right'] : ['top', 'bottom'];
+          if ((edges[0] === 'left' ? dx : dy) > 0) edges.reverse();
+          start = endpoint(parent, edges[0]); end = endpoint(child, edges[1]);
+        }
         cable(start, end, 'muted', 3, false, false, false);
         socket(start, 'muted', 10, 3); socket(end, 'muted', 10, 3);
       }
@@ -2720,9 +2922,10 @@
         roundBar: roundBar.hidden ? null : { top: roundBar.getBoundingClientRect().top },
         specPanel: specBox ? { left: specBox.left, top: specBox.top } : null };
     }
-    function applyView() {
+    function applyView(resized = false) {
       const enteredFar = GrillCamera.isFar(view.z) && !world.classList.contains('far');
-      world.style.setProperty('--z', String(view.z)); world.classList.toggle('far', GrillCamera.isFar(view.z));
+      const zoom = String(view.z), zoomChanged = world.style.getPropertyValue('--z') !== zoom;
+      world.style.setProperty('--z', zoom); world.classList.toggle('far', GrillCamera.isFar(view.z));
       if (enteredFar) fitFarLabels();
       world.style.transform = 'translate(' + view.x + 'px, ' + view.y + 'px) scale(' + view.z + ')';
       grid.style.setProperty('--dot-radius', view.z + 'px');
@@ -2730,6 +2933,11 @@
       grid.style.backgroundPosition = view.x + 'px ' + view.y + 'px';
       const percent = document.getElementById('zoom-percent');
       if (percent) percent.textContent = Math.round(view.z * 100) + '%';
+      const sketch = nodeRecords.get(workingSketch?.nodeId);
+      if ((zoomChanged || resized) && sketch?.minimized) {
+        sketch.width = sketch.element.offsetWidth; sketch.height = sketch.element.offsetHeight;
+        scheduleLines();
+      }
     }
     function cancelGlide() { if (glideFrame !== null) cancelAnimationFrame(glideFrame); glideFrame = null; }
     function worldPoint(x, y) { return { x: (x - view.x) / view.z, y: (y - view.y) / view.z }; }
@@ -2740,25 +2948,51 @@
       applyView();
     }
     function zoomCenter(factor) { zoomAt(view.z * factor, window.innerWidth / 2, window.innerHeight / 2); }
+    function cameraBox({ x, y, width, height, minimized }) {
+      if (!minimized) return { x, y, width, height };
+      return { x, y, width: Math.min(LAYOUT.sketchChipWidth, window.innerWidth - LAYOUT.sketchFocusPadding),
+        height: LAYOUT.sketchChipHeight, screenSized: true };
+    }
     function fitToScreen(animate) {
       if (!nodeRecords.size) return;
       recordInteraction();
       cancelGlide();
-      const boxes = [...nodeRecords.values()].map(({ x, y, width, height }) => ({ x, y, width, height }));
+      const boxes = [...nodeRecords.values()].map(cameraBox);
       const screen = measureScreen();
-      let target = GrillCamera.fit(boxes, screen);
+      const options = { padding: sketchOnPhone() && boxes.some(box => box.screenSized) ? LAYOUT.sketchFocusPadding : undefined };
+      let target = GrillCamera.fit(boxes, screen, options);
       if (screen.width < 900 && screen.specPanel) {
         const bottom = Math.min(screen.specPanel.top, screen.toolbar.top - 8, screen.roundBar ? screen.roundBar.top - 8 : screen.height);
-        if (boxes.some(box => box.y * target.z + target.y < screen.header.bottom + 8 || (box.y + box.height) * target.z + target.y > bottom)) {
+        if (boxes.some(box => {
+          const top = box.y * target.z + target.y;
+          return top < screen.header.bottom + 8 || top + box.height * (box.screenSized ? 1 : target.z) > bottom;
+        })) {
           specCollapsed = true; updateSpec();
-          target = GrillCamera.fit(boxes, measureScreen());
+          target = GrillCamera.fit(boxes, measureScreen(), options);
         }
       }
       glideView(target, animate === true);
     }
     // Focus the current frontier while respecting recent manual navigation.
     function recordInteraction() { lastInteraction = Date.now(); }
-    function focusView(animate, only) {
+    function focusSketchChip(record, animate) {
+      glideView(GrillCamera.fit([cameraBox(record)], measureScreen(), { padding: LAYOUT.sketchFocusPadding }), animate);
+    }
+    function focusOpenSketch(record, animate) {
+      const frame = sketchNodes.get(record.sketch.id).embedded.frame;
+      const width = parseFloat(frame.style.width);
+      const box = { x: record.x + record.element.clientLeft + frame.offsetLeft, y: record.y, width, height: record.height };
+      const zoom = Math.min(LAYOUT.sketchOpenWidth, window.innerWidth - LAYOUT.sketchFocusPadding) / width;
+      const options = { minimum: zoom, maximum: zoom, padding: LAYOUT.sketchFocusPadding };
+      let screen = measureScreen();
+      let target = GrillCamera.focus([box], screen, options);
+      if (screen.specPanel && (record.y + record.height) * target.z + target.y > screen.specPanel.top) {
+        specCollapsed = true; updateSpec(); screen = measureScreen();
+        target = GrillCamera.focus([box], screen, options);
+      }
+      glideView(target, animate);
+    }
+    function focusView(animate, only, { includeSketch = true, keepVisible } = {}) {
       if (!graph) return;
       let ids = only || currentSession.questionsByStatus.asking.map(q => q.id);
       if (!ids.length) ids = [ideaId].concat((graph.levels[1] || []).map(node => node.id));
@@ -2770,7 +3004,14 @@
       }
       if (!records.length) return;
       const boxes = records.map(({ x, y, width, height }) => ({ x, y, width, height }));
-      glideView(GrillCamera.focus(boxes, measureScreen(), { minimum: only ? .4 : .7 }), animate);
+      const sketch = nodeRecords.get(workingSketch?.nodeId);
+      let extra;
+      if (includeSketch && sketch && !ids.includes(sketch.id) && ids.some(id => currentSession.questionsById[id]?.status === 'asking')) {
+        extra = cameraBox(sketch);
+      }
+      const screen = measureScreen();
+      const target = GrillCamera.focus(boxes, screen, { minimum: only ? .4 : .7, extra });
+      if (!keepVisible || GrillCamera.showsHalf(keepVisible, screen, target)) glideView(target, animate);
     }
     function glideView(end, animate) {
       cancelGlide();
@@ -2791,7 +3032,12 @@
       flow = flow === 'td' ? 'lr' : 'td';
       try { localStorage.setItem(flowKey, flow); } catch (_) { /* The setting is optional when storage is unavailable. */ }
       document.documentElement.dataset.flow = flow;
-      manualOffsets = readOffsets(); measureAndLayout(); updateFlowButton(); fitToScreen(true);
+      manualOffsets = readOffsets(); workingSketchDrag = readWorkingSketchDrag(); measureAndLayout(); updateFlowButton();
+      const sketch = nodeRecords.get(workingSketch?.nodeId);
+      if (sketch && sketchOnPhone()) {
+        if (sketch.minimized) focusView(true);
+        else focusOpenSketch(sketch, true);
+      } else fitToScreen(true);
     }
     function updateFlowButton() {
       const control = toolbar.querySelector('.flow-toggle'), label = currentLabels[flow === 'td' ? 'flowTd' : 'flowLr'];
@@ -2814,7 +3060,7 @@
         button('⊡', currentLabels.fit, fitToScreen),
         button('◎', currentLabels.focusRound, () => { recordInteraction(); focusView(false); }),
         button('', '', toggleFlow, 'flow-toggle'),
-        button('↺', currentLabels.resetLayout, () => { manualOffsets = Object.create(null); nodeSizes = Object.create(null); saveOffsets(); saveNodeSizes();
+        button('↺', currentLabels.resetLayout, () => { manualOffsets = Object.create(null); nodeSizes = Object.create(null); workingSketchDrag = null; saveOffsets(); saveNodeSizes();
           for (const record of nodeRecords.values()) applyNodeSize(record);
           measureAndLayout(); fitToScreen(); })
       );
@@ -2853,7 +3099,7 @@
     window.addEventListener('resize', () => {
       const narrow = window.innerWidth < 900;
       if (narrow && !wasNarrow) { specCollapsed = true; updateSpec(); }
-      wasNarrow = narrow; updateSpec(); scaleEnlargedSketch(); applyView();
+      wasNarrow = narrow; updateSpec(); scaleEnlargedSketch(); applyView(true);
     });
 
     // Pointer capture handles pans, node drags, and two-finger touch pinches.
@@ -2888,7 +3134,7 @@
         connection = { pointerId: event.pointerId, record, point: worldPoint(event.clientX, event.clientY), startX: event.clientX, startY: event.clientY, moved: false };
         scheduleLines(); return;
       }
-      if (event.target.closest('textarea, input, a, .delete-ref, .ref-note, .disconnect-ref, .details-toggle, .research-chip, .node-resize, .variant-open, .accept-recommendation')) return;
+      if (event.target.closest('textarea, input, a, .delete-ref, .ref-note, .disconnect-ref, .details-toggle, .research-chip, .node-resize, .variant-open, .accept-recommendation, .sketch-toggle')) return;
       cancelGlide(); event.preventDefault();
       pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
       canvas.setPointerCapture(event.pointerId);
@@ -2935,7 +3181,13 @@
       gesture.dragged = true; canvas.classList.add('dragging');
       if (gesture.record) {
         const record = gesture.record;
-        manualOffsets[record.id] = { dx: gesture.offsetX + dx / view.z, dy: gesture.offsetY + dy / view.z };
+        if (record.id === workingSketch?.nodeId) {
+          gesture.sketchStart ||= { x: record.x, y: record.y };
+          workingSketchDrag = { id: record.id, round: workingRound,
+            position: { x: gesture.sketchStart.x + dx / view.z, y: gesture.sketchStart.y + dy / view.z } };
+        } else {
+          manualOffsets[record.id] = { dx: gesture.offsetX + dx / view.z, dy: gesture.offsetY + dy / view.z };
+        }
         applyOffsets(); scheduleLines();
         if (record.ref && record.ref.user && canWrite) setDropTarget(connectionTargetAt(event.clientX, event.clientY, record.id));
       } else { view.x = gesture.x + dx; view.y = gesture.y + dy; applyView(); }
@@ -2986,7 +3238,7 @@
       } else if (!canceled) {
         selectQuestion(ended.question || '');
         if (ended.record && ended.record.kind === 'report') openReader(ended.record.note.id);
-        if (ended.record && ended.record.kind === 'sketch') openEnlargedSketch(ended.record.element.dataset.sketchId);
+        if (ended.record?.kind === 'sketch') activateSketch(ended.record.id);
         if (ended.answerControl) {
           suppressClickUntil = Date.now() + 500; chooseAnswer(ended.question, ended.answerControl.dataset.answerOption);
           if (ended.answerControl.isConnected) ended.answerControl.focus({ preventScroll: true });

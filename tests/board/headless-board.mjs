@@ -135,7 +135,7 @@ async function launchBrowser(profile, children) {
     await send('Input.dispatchMouseEvent', { type, x, y, button, buttons, clickCount: 1 });
   }
   return {
-    async go(url) { const result = await send('Page.navigate', { url }); mainFrameId = result.frameId; return result; }, evaluate,
+    async go(url) { const result = await send('Page.navigate', { url }); mainFrameId = result.frameId; return result; }, evaluate, send,
     async frameValues(expression) {
       const frames = [...contexts.values()].filter(context => context.auxData?.isDefault && context.auxData.frameId !== mainFrameId);
       const values = await Promise.all(frames.map(async context => {

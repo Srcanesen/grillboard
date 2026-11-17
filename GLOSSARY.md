@@ -54,6 +54,9 @@ _Avoid_: canvas, viewer, dashboard
 A rough picture of the thing itself, redrawn as decisions settle.
 _Avoid_: mockup, wireframe, preview
 
+**Working sketch**:
+The idea's current sketch, placed beside the asking questions. It can be shown open or as a compact chip.
+
 **Variant sketch**:
 A sketch of one option of a question, shown so the person chooses by looking.
 _Avoid_: option preview
