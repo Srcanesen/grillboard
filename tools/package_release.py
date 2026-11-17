@@ -6,8 +6,10 @@ The version defaults to the newest git tag without its leading "v".
 """
 
 from pathlib import Path
+import os
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 
@@ -46,11 +48,18 @@ def package(version, out_dir):
     name = f"grillboard-{version}"
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / f"{name}.zip"
-    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(f"{name}/INSTALL.txt", INSTALL.format(version=version))
-        for path in git("ls-files", "-z", SKILL).split("\0"):
-            if path:
-                archive.write(ROOT / path, f"{name}/{Path(path).relative_to('skills')}")
+    with tempfile.NamedTemporaryFile(dir=out_dir, prefix=f".{name}-", suffix=".zip",
+                                     delete=False) as pending:
+        temporary = Path(pending.name)
+    try:
+        with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(f"{name}/INSTALL.txt", INSTALL.format(version=version))
+            for path in git("ls-files", "-z", SKILL).split("\0"):
+                if path:
+                    archive.write(ROOT / path, f"{name}/{Path(path).relative_to('skills')}")
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
     return target
 
 
