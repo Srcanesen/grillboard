@@ -162,6 +162,7 @@
     .question-card { width: 300px; max-width: none; }
     .question-card.picture-options { width: 460px; }
     .question-card.selected { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .question-card.sketch-linked { outline: max(3px, calc(3px / var(--z, 1))) solid var(--accent); outline-offset: 3px; }
     .question-card.drop-target, .idea-card.drop-target { box-shadow: 0 0 0 4px var(--accent-tint); border-color: var(--accent); }
     .tiles { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
     .tiles .option { display: flex; flex-wrap: wrap; padding: 0 0 7px; overflow: hidden; gap: 5px; }
@@ -215,6 +216,7 @@
       .sketch-card.minimized.unseen { animation: none; }
     }
     .sketch-card iframe, .sketch-card img { pointer-events: none; }
+    .sketch-frame.link-hover { cursor: pointer; }
     .sketch-card-note { color: var(--muted); font-size: 12px; margin: 10px 0 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .sketch-frame { position: relative; flex: none; overflow: hidden; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--sketch-shadow); }
     .sketch-surface { position: absolute; left: 0; top: 0; border: 0; transform-origin: 0 0; max-width: none; max-height: none; }
@@ -387,7 +389,8 @@
     .variant-preview .sketch-frame { position: absolute; top: 0; left: 0; }
     .variant-preview iframe { pointer-events: none; }
     .round-bar { position: fixed; z-index: 5; left: 50%; transform: translateX(-50%); bottom: 16px; max-width: calc(100vw - 32px); padding: 10px 12px; display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 8px; font-size: 13px; }
-    .round-bar button, .accept-recommendation, .variant-open { border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--card); color: var(--text); padding: 6px 9px; }
+    .round-bar button, .accept-recommendation, .variant-open, .show-in-sketch { border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--card); color: var(--text); padding: 6px 9px; }
+    .show-in-sketch { margin-top: 6px; padding: 2px 7px; font-size: 12px; }
     .round-bar .send-answers { background: var(--accent); color: var(--card); border-color: var(--accent); font-weight: 600; }
     .round-bar button:disabled { opacity: .5; cursor: default; }
     .round-bar .round-count { border-color: transparent; background: transparent; }
@@ -1014,7 +1017,25 @@
         if (!asking.length) return null;
         return asking.every(q => q.round !== '') ? Math.max(...asking.map(q => q.round)) : JSON.stringify(asking.map(q => q.id).sort());
       }
-      return { observeSketches, roundKey };
+      function linkedQuestion(id, questionsById) {
+        if (!id) return '';
+        const owns = key => Object.prototype.hasOwnProperty.call(questionsById, key);
+        if (owns(id)) return id;
+        if (!/^q[0-9]+$/i.test(id)) return '';
+        const other = (id[0] === 'q' ? 'Q' : 'q') + id.slice(1);
+        return owns(other) ? other : '';
+      }
+      function regionsByQuestion(regions, questionsById) {
+        const byQuestion = new Map();
+        for (const { id, region } of regions) {
+          const question = linkedQuestion(id, questionsById);
+          if (!question) continue;
+          if (!byQuestion.has(question)) byQuestion.set(question, []);
+          byQuestion.get(question).push(region);
+        }
+        return byQuestion;
+      }
+      return { observeSketches, roundKey, linkedQuestion, regionsByQuestion };
     })();
   </script>
   <script>
@@ -1028,6 +1049,7 @@
         roundAnswered: '{done} of {total} answered', pickRecommendations: 'Pick the recommendations',
         sendAnswers: 'Send answers', sent: 'Sent', newQuestion: 'New', answersSent: 'Answers sent. The next round is on its way…',
         remainingAnswers: '{count} unanswered', answerFailed: 'Could not send answers. Try again.', viewVariant: 'View larger',
+        showInSketch: 'Show in sketch',
         recommended: 'Recommended', answer: 'Answer', waitingOn: 'Waiting on',
         researchingHint: 'The agent is looking this up.', spec: 'Spec',
         specHint: 'Fills in as decisions settle.', decided: 'Decided',
@@ -1058,6 +1080,7 @@
         roundAnswered: 'Cevaplanan: {done} / {total}', pickRecommendations: 'Önerileri seç',
         sendAnswers: 'Cevapları gönder', sent: 'Gönderildi', newQuestion: 'Yeni', answersSent: 'Cevaplar gönderildi. Sıradaki tur hazırlanıyor…',
         remainingAnswers: '{count} soru cevapsız', answerFailed: 'Cevaplar gönderilemedi. Tekrar deneyin.', viewVariant: 'Büyüt',
+        showInSketch: 'Taslakta göster',
         recommended: 'Öneri', answer: 'Cevap', waitingOn: 'Şunu bekliyor',
         researchingHint: 'Ajan bu konuyu araştırıyor.', spec: 'Spec',
         specHint: 'Kararlar netleştikçe tamamlanır.', decided: 'Karar verilenler',
@@ -1454,6 +1477,9 @@
     const sketchState = Object.create(null);
     let sketchObservation = null;
     let workingSketch = null, workingRound = null, workingSketchDrag = null;
+    let workingRegions = new Map(), sketchHover = null;
+    let sketchLinkedQuestion = '', shownSketchQuestion = '';
+    let outlinedRegions = new Set();
     let sketchSessionJson = '';
     let enlargedSketch = null;
     const researchSteps = new Map();
@@ -1697,8 +1723,11 @@
       card.setAttribute('aria-selected', String(selectedQuestion === q.id));
       card.dataset.questionId = q.id;
       card.addEventListener('keydown', event => { if (event.key === 'Enter' && event.target === card) { event.preventDefault(); selectQuestion(q.id); } });
-      card.addEventListener('pointerenter', () => { hoveredQuestion = q.id; scheduleLines(); });
-      card.addEventListener('pointerleave', () => { if (hoveredQuestion === q.id) hoveredQuestion = ''; scheduleLines(); });
+      card.addEventListener('pointerenter', () => { hoveredQuestion = q.id; syncRegionOutlines(); scheduleLines(); });
+      card.addEventListener('pointerleave', () => {
+        if (hoveredQuestion === q.id) hoveredQuestion = '';
+        syncRegionOutlines(); scheduleLines();
+      });
       const heading = element('header', 'question-header');
       const top = element('div', 'card-top');
       const body = element('div', 'question-body');
@@ -2070,6 +2099,132 @@
 
     // Nodes and the enlarged overlay share safe, revision-aware sketch frames.
     function usableSketches() { return currentSession ? currentSession.boardSketches : []; }
+    function workingSketchSurface() { return sketchNodes.get(workingSketch?.id)?.embedded.surface; }
+    function syncSketchLinks() {
+      const surface = workingSketchSurface();
+      workingRegions = GrillWorkingSketch.regionsByQuestion(surface?.sketchRegions || [], currentSession.questionsById);
+      let changed = false;
+      for (const [id, card] of cardNodes) {
+        card.classList.toggle('sketch-linked', id === sketchLinkedQuestion);
+        const control = card.querySelector('.show-in-sketch');
+        if (workingRegions.has(id) && !control) {
+          const label = currentLabels.showInSketch;
+          card.querySelector('.question-header').append(button(label, label, () => showInSketch(id), 'show-in-sketch'));
+          changed = true;
+        } else if (!workingRegions.has(id) && control) {
+          control.remove();
+          changed = true;
+        }
+      }
+      syncRegionOutlines();
+      return changed;
+    }
+    function syncRegionOutlines() {
+      const record = nodeRecords.get(workingSketch?.nodeId);
+      const next = new Set(record && !record.minimized
+        ? [...(workingRegions.get(shownSketchQuestion) || []), ...(workingRegions.get(hoveredQuestion) || [])] : []);
+      for (const region of outlinedRegions) if (!next.has(region)) region.classList.remove('grill-region-outlined');
+      for (const region of next) if (!outlinedRegions.has(region)) region.classList.add('grill-region-outlined');
+      outlinedRegions = next;
+    }
+    function showInSketch(id) {
+      const regions = workingRegions.get(id);
+      const record = nodeRecords.get(workingSketch?.nodeId);
+      if (!regions || !record) return;
+      recordInteraction();
+      if (record.minimized) toggleWorkingSketch(record.id);
+      else if (sketchOnPhone()) focusOpenSketch(record, true);
+      else focusView(true, [record.id]);
+      shownSketchQuestion = id;
+      syncRegionOutlines();
+      regions[0].scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+    }
+    function clearSketchLinks() {
+      cardNodes.get(sketchLinkedQuestion)?.classList.remove('sketch-linked');
+      sketchLinkedQuestion = '';
+      if (shownSketchQuestion) {
+        shownSketchQuestion = '';
+        syncRegionOutlines();
+      }
+    }
+    function questionForRegion(region) {
+      return region ? GrillWorkingSketch.linkedQuestion(region.getAttribute('data-q'), currentSession.questionsById) : '';
+    }
+    function followSketchRegion(region) {
+      const id = questionForRegion(region), record = nodeRecords.get(id);
+      if (!record) return;
+      if (!lightbox.hidden) closeLightbox();
+      setSketchHover(null);
+      recordInteraction();
+      markSeen(id);
+      sketchLinkedQuestion = id;
+      record.element.classList.add('sketch-linked');
+      glideView(GrillCamera.focus([cameraBox(record)], measureScreen(), { minimum: .4, padding: 32 }), true);
+    }
+    function setSketchHover(region, frame) {
+      if (sketchHover?.region === region && sketchHover?.frame === frame) return;
+      sketchHover?.region.classList.remove('grill-region-hover');
+      sketchHover?.frame.classList.remove('link-hover');
+      sketchHover = region ? { region, frame } : null;
+      if (region) {
+        region.classList.add('grill-region-hover');
+        frame.classList.add('link-hover');
+      }
+    }
+    // Canvas frames leave dragging and blank-area clicks on the board. Hit-test marked regions through the frame.
+    function canvasSketchHit(event) {
+      const frame = event.target.closest?.('.sketch-card .sketch-frame');
+      const surface = frame?.firstElementChild;
+      if (!surface?.sketchRegions?.length) return {};
+      const box = surface.getBoundingClientRect();
+      const x = (event.clientX - box.left) * surface.clientWidth / box.width;
+      const y = (event.clientY - box.top) * surface.clientHeight / box.height;
+      const region = surface.contentDocument?.elementFromPoint(x, y)?.closest('[data-q]');
+      return { region, frame };
+    }
+    document.addEventListener('pointermove', event => {
+      const { region, frame } = canvasSketchHit(event);
+      setSketchHover(questionForRegion(region) ? region : null, frame);
+    });
+    document.addEventListener('pointerleave', () => setSketchHover(null));
+    document.addEventListener('click', event => {
+      if (!canvas.contains(event.target) || !event.detail || Date.now() >= suppressClickUntil) clearSketchLinks();
+    }, true);
+    function bindSketchRegions(surface, frame, doc) {
+      if (location.protocol === 'file:') return;
+      surface.sketchRegions = doc ? [...doc.querySelectorAll('[data-q]')].map(region => ({ region, id: region.getAttribute('data-q') })) : [];
+      if (surface.sketchRegions.length) {
+        const style = doc.createElement('style');
+        style.textContent = `
+          .grill-region-hover, .grill-region-hover * { cursor: pointer !important; }
+          .grill-region-hover, .grill-region-outlined {
+            outline: 3px solid #a33612 !important; outline-offset: -3px !important;
+            box-shadow: 0 0 0 2px #fff !important;
+          }
+          @media (prefers-color-scheme: dark) {
+            .grill-region-hover, .grill-region-outlined {
+              outline-color: #ffb17c !important; box-shadow: 0 0 0 2px #201d1a !important;
+            }
+          }
+        `;
+        doc.head.append(style);
+      }
+      if (lightbox.contains(surface)) {
+        doc?.addEventListener('pointermove', event => {
+          const region = event.target.closest?.('[data-q]');
+          setSketchHover(questionForRegion(region) ? region : null, frame);
+        });
+        doc?.addEventListener('pointerleave', () => setSketchHover(null));
+        doc?.addEventListener('click', event => {
+          clearSketchLinks();
+          const region = event.target.closest?.('[data-q]');
+          if (!questionForRegion(region)) return;
+          event.preventDefault();
+          followSketchRegion(region);
+        }, true);
+      }
+      if (surface === workingSketchSurface() && syncSketchLinks()) measureAndLayout();
+    }
     function sketchUrl(sketch) {
       const url = new URL(safeSource(sketch.src), sessionUrl);
       url.searchParams.set('rev', String(sketch.rev));
@@ -2098,16 +2253,19 @@
       const url = sketchUrl(sketch);
       const html = /\.html?$/i.test(new URL(url).pathname);
       const surface = element(html ? 'iframe' : 'img', 'sketch-surface');
+      const frame = element('div', 'sketch-frame'); frame.append(surface);
+      frame.addEventListener('pointerleave', () => { if (sketchHover?.frame === frame) setSketchHover(null); });
       if (html) {
         surface.setAttribute('sandbox', '');
         surface.addEventListener('load', () => {
-          if (surface.contentDocument) surface.contentDocument.addEventListener('keydown', dialogKeydown, true);
+          const doc = surface.contentDocument;
+          doc?.addEventListener('keydown', dialogKeydown, true);
+          bindSketchRegions(surface, frame, doc);
         });
         surface.setAttribute('referrerpolicy', 'no-referrer');
         surface.setAttribute('loading', 'eager');
       }
       loadSketchSurface(surface, url);
-      const frame = element('div', 'sketch-frame'); frame.append(surface);
       return { frame, surface, key: new URL(sketch.src, sessionUrl).href + '\n' + sketch.rev, checkedSession: sketchSessionJson };
     }
     function refreshSketchFrame(embedded, sketch, checkContent = false) {
@@ -2196,7 +2354,7 @@
       if (nodeId !== workingSketch?.nodeId) return;
       const record = nodeRecords.get(nodeId);
       recordInteraction(); cancelGlide(); saveSketchState(workingSketch, !record.minimized);
-      applyNodeSize(record); measureAndLayout();
+      applyNodeSize(record); measureAndLayout(); syncRegionOutlines();
       if (!record.minimized) {
         if (sketchOnPhone()) focusOpenSketch(record, true);
         else focusView(true, [nodeId]);
@@ -2433,7 +2591,7 @@
       }
       refreshAnswerControls();
       for (const editor of world.querySelectorAll('.answer-editor')) growAnswer(editor);
-      saveNodeSizes(); measureAndLayout(); selectQuestion(selectedQuestion);
+      syncSketchLinks(); saveNodeSizes(); measureAndLayout(); selectQuestion(selectedQuestion);
       if (focusId && nodeRecords.has(focusId) && !focused.isConnected) {
         const node = nodeRecords.get(focusId).element;
         const editor = answerFocus && node.querySelector('.answer-editor');
@@ -3134,7 +3292,7 @@
         connection = { pointerId: event.pointerId, record, point: worldPoint(event.clientX, event.clientY), startX: event.clientX, startY: event.clientY, moved: false };
         scheduleLines(); return;
       }
-      if (event.target.closest('textarea, input, a, .delete-ref, .ref-note, .disconnect-ref, .details-toggle, .research-chip, .node-resize, .variant-open, .accept-recommendation, .sketch-toggle')) return;
+      if (event.target.closest('textarea, input, a, .delete-ref, .ref-note, .disconnect-ref, .details-toggle, .research-chip, .node-resize, .variant-open, .accept-recommendation, .sketch-toggle, .show-in-sketch')) return;
       cancelGlide(); event.preventDefault();
       pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType });
       canvas.setPointerCapture(event.pointerId);
@@ -3146,7 +3304,8 @@
       gesture = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: view.x, y: view.y,
         record, offsetX: record && manualOffsets[record.id] ? manualOffsets[record.id].dx : 0,
         offsetY: record && manualOffsets[record.id] ? manualOffsets[record.id].dy : 0, dragged: false, inlineRef,
-        answerControl: event.target.closest('[data-answer-option]'), question: node && node.dataset.questionId, picture: event.target.closest('[data-picture]') };
+        answerControl: event.target.closest('[data-answer-option]'), question: node && node.dataset.questionId,
+        picture: event.target.closest('[data-picture]'), sketchRegion: canvasSketchHit(event).region };
       if (record) record.element.focus({ preventScroll: true });
     });
     canvas.addEventListener('pointermove', event => {
@@ -3236,9 +3395,13 @@
           }
         }
       } else if (!canceled) {
+        clearSketchLinks();
         selectQuestion(ended.question || '');
         if (ended.record && ended.record.kind === 'report') openReader(ended.record.note.id);
-        if (ended.record?.kind === 'sketch') activateSketch(ended.record.id);
+        if (ended.sketchRegion) {
+          suppressClickUntil = Date.now() + 500;
+          followSketchRegion(ended.sketchRegion);
+        } else if (ended.record?.kind === 'sketch') activateSketch(ended.record.id);
         if (ended.answerControl) {
           suppressClickUntil = Date.now() + 500; chooseAnswer(ended.question, ended.answerControl.dataset.answerOption);
           if (ended.answerControl.isConnected) ended.answerControl.focus({ preventScroll: true });
