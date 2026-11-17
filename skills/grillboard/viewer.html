@@ -153,7 +153,7 @@
     button, textarea { font: inherit; color: var(--text); }
     button { cursor: pointer; }
     button:focus-visible, a:focus-visible, .node:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-    #canvas { position: fixed; inset: 0; touch-action: none; user-select: none; overflow: hidden; cursor: grab; }
+    #canvas { position: fixed; inset: 0; touch-action: none; user-select: none; overflow: clip; cursor: grab; }
     #canvas.dragging { cursor: grabbing; }
     #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
     #grid { position: absolute; inset: 0; pointer-events: none; background-image: radial-gradient(circle, var(--border) var(--dot-radius, 1px), transparent var(--dot-radius, 1px)); opacity: .25; }
@@ -1330,6 +1330,7 @@
     const board = document.getElementById('board');
     const header = document.getElementById('header');
     const canvas = document.getElementById('canvas');
+    canvas.addEventListener('scroll', () => { canvas.scrollLeft = 0; canvas.scrollTop = 0; });
     const world = document.getElementById('world');
     const grid = document.getElementById('grid');
     const spec = document.getElementById('spec-content');
@@ -1494,7 +1495,7 @@
       const asking = currentSession ? currentSession.questionsByStatus.asking : [];
       const open = asking.filter(q => !q.pending);
       roundBar.hidden = !canWrite || !asking.length;
-      roundBar.replaceChildren(); if (roundBar.hidden) return;
+      roundBar.replaceChildren(); if (roundBar.hidden) { updateFloatingControls(); return; }
       if (currentSession.pendingCount) roundBar.append(element('div', 'round-message', currentLabels.answersSent));
       if (open.length) {
         const done = open.filter(q => GrillSession.hasAnswer(draftFor(q.id))).length;
@@ -2833,6 +2834,8 @@
         roundBar.style.maxWidth = Math.max(200, right - left - 16) + 'px';
       }
       if (window.innerWidth < 900) roundBar.style.maxWidth = '';
+      document.getElementById('reference-add-errors').style.bottom =
+        (roundBar.hidden ? 76 : window.innerHeight - roundBar.getBoundingClientRect().top + 8) + 'px';
     }
     function updateSpec() {
       specPanel.classList.toggle('collapsed', specCollapsed);
