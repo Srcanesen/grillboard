@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from urllib.request import urlopen
+from urllib.request import ProxyHandler, build_opener
 
 from playwright.sync_api import sync_playwright
 
@@ -222,7 +222,7 @@ def main():
                     raise RuntimeError("Board server did not start")
                 time.sleep(0.05)
             url = json.loads((session / "server.json").read_text())["url"]
-            with urlopen(url + "api/ping") as response:
+            with build_opener(ProxyHandler({})).open(url + "api/ping") as response:
                 assert json.load(response)["ok"] is True
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(channel="chrome", headless=True)
