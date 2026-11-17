@@ -247,6 +247,32 @@ class EntryPointTests(unittest.TestCase):
         with response:
             return response.code, response.read()
 
+    def test_reference_request_id_replay_preserves_original_reference(self):
+        for number, (body, content_type, query) in enumerate([
+                (json.dumps({"url": "https://example.com/source", "target": "idea"}).encode(),
+                 "application/json", ""),
+                (b"picture data", "image/png", "&target=q1&name=source.png")], 1):
+            with self.subTest(content_type=content_type):
+                request_id = f"reference-{number}"
+                path = "api/refs?requestId=" + request_id + query
+                headers = {"Content-Type": content_type}
+                status, response = self.request(path, "POST", body, headers)
+                self.assertEqual(status, 200)
+                original = json.loads(response)["ref"]
+                saved = (self.root / "user.js").read_bytes()
+                for _ in range(2):
+                    status, response = self.request(path, "POST", body, headers)
+                    self.assertEqual(status, 200)
+                    self.assertEqual(json.loads(response), {"ok": True, "ref": original})
+                self.assertEqual((self.root / "user.js").read_bytes(), saved)
+                stored = server.read_user(self.root)
+                self.assertEqual(stored["refRequests"][request_id], f"u{number}")
+                self.assertEqual([ref["id"] for ref in stored["refs"]],
+                                 [f"u{i}" for i in range(1, number + 1)])
+                self.assertNotIn("requestId", original)
+                if content_type == "image/png":
+                    self.assertEqual(list((self.root / "refs").iterdir()), [self.root / original["src"]])
+
     def test_failed_image_delete_preserves_reference_and_image(self):
         picture = b"picture data"
         status, body = self.request("api/refs?name=sample.png", "POST", picture,
@@ -608,6 +634,21 @@ sys.exit(server.main())
         output, errors = waiter.communicate(timeout=3)
         self.assertEqual(waiter.returncode, 2, errors)
         self.assertEqual(json.loads(output), {"answers": [], "timeout": True})
+
+    def test_waiter_delivers_utf8_with_non_utf8_stdout(self):
+        status, response = self.post({"items": [dict(ITEM, text="Türkçe cevap 🥘")]})
+        self.assertEqual(status, 200)
+        for encoding in ("cp1252", "ascii"):
+            with self.subTest(encoding=encoding), patch.dict("os.environ", {"PYTHONIOENCODING": encoding}):
+                result = subprocess.run(
+                    [sys.executable, str(SERVER_PATH), str(self.root), "--wait-answers"],
+                    capture_output=True, timeout=3)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Türkçe cevap 🥘".encode("utf-8"), result.stdout)
+                self.assertEqual(json.loads(result.stdout.decode("utf-8")),
+                                 {"answers": [response["batch"]]})
+                self.assertEqual(json.loads(result.stdout)["answers"][0]["items"],
+                                 [{"question": "q1", "option": "a", "text": "Türkçe cevap 🥘"}])
 
     def test_second_waiter_exits_three(self):
         first = self.start("--wait-answers")

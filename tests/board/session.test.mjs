@@ -74,7 +74,7 @@ const pendingCases = [
 ];
 for (const [name, raw, user, options, pending, pendingItem, count] of pendingCases) {
   test('pending: ' + name, () => {
-    const model = session.model({ ...raw, questions: [{ id: 'q2', status: raw.questionStatus || 'asking' }] }, user, options);
+    const model = session.model({ ...raw, questions: [{ id: 'q2', status: raw.questionStatus || 'asking', options: [{ id: 'a' }] }] }, user, options);
     assert.deepEqual({ pending: model.questions[0].pending, item: model.questions[0].pendingItem, count: model.pendingCount },
       { pending, item: pendingItem, count });
   });

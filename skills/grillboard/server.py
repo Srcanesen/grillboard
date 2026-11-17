@@ -121,6 +121,15 @@ def read_user(root):
             raise ValueError("Invalid reference id in user.js")
         seen.add(ref["id"])
         highest = max(highest, int(match[1]))
+    ref_requests = data.get("refRequests", {})
+    if not isinstance(ref_requests, dict):
+        raise ValueError("Invalid reference request ids in user.js")
+    for request_id, ref_id in ref_requests.items():
+        if (not isinstance(request_id, str) or not REQUEST_ID.fullmatch(request_id)
+                or not isinstance(ref_id, str) or not REF_ID.fullmatch(ref_id)):
+            raise ValueError("Invalid reference request ids in user.js")
+        # Deleted references still consume their request and reference ids.
+        highest = max(highest, int(REF_ID.fullmatch(ref_id)[1]))
     counter = data.get("nextId", highest + 1)
     if type(counter) is not int or counter < 1:
         raise ValueError("Invalid counter in user.js")
@@ -360,6 +369,11 @@ class BoardHandler(BaseHTTPRequestHandler):
         self.json_response(200, {"ok": True, "batch": batch})
 
     def add_ref(self):
+        query = parse_qs(self.path.partition("?")[2], keep_blank_values=True)
+        request_ids = query.get("requestId", [])
+        request_id = request_ids[0] if request_ids else None
+        if request_ids and (len(request_ids) != 1 or not REQUEST_ID.fullmatch(request_id)):
+            raise RequestError(400, "Bad request id")
         content_type = self.headers.get_content_type()
         picture = None
         name = ""
@@ -378,7 +392,6 @@ class BoardHandler(BaseHTTPRequestHandler):
             target = valid_target(data.get("target", ""))
             kind = "link"
         elif content_type in IMAGES:
-            query = parse_qs(self.path.partition("?")[2], keep_blank_values=True)
             target = valid_target(query.get("target", [""])[0])
             original = query.get("name", [""])[0]
             name = "".join(c for c in original if c not in "/\\" and not unicodedata.category(c).startswith("C"))[:200]
@@ -389,28 +402,36 @@ class BoardHandler(BaseHTTPRequestHandler):
         root = self.server.root
         with self.server.user_lock:
             data = read_user(root)
-            ref_id = f"u{data['nextId']}"
-            data["nextId"] += 1
-            # Reserve the id before writing a picture, including across a crash.
-            write_user(root, data)
-            if picture is not None:
-                refs = inside(root, root / "refs")
-                refs.mkdir(exist_ok=True)
-                src = f"refs/{ref_id}.{IMAGES[content_type]}"
-                picture_path = inside(root, root / src)
-                # Exclusive creation refuses overwriting an existing file.
-                with open(picture_path, "xb") as out:
-                    out.write(picture)
-            ref = {"id": ref_id, "kind": kind, "src": src, "name": name,
-                   "target": target, "note": "",
-                   "added": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
-            data["refs"].append(ref)
-            try:
+            ref_id = data.get("refRequests", {}).get(request_id)
+            if ref_id is not None:
+                ref = next((ref for ref in data["refs"] if ref["id"] == ref_id), None)
+                if ref is None:
+                    raise RequestError(404, "Unknown reference")
+            else:
+                ref_id = f"u{data['nextId']}"
+                data["nextId"] += 1
+                # Reserve the id before writing a picture, including across a crash.
                 write_user(root, data)
-            except Exception:
                 if picture is not None:
-                    picture_path.unlink(missing_ok=True)
-                raise
+                    refs = inside(root, root / "refs")
+                    refs.mkdir(exist_ok=True)
+                    src = f"refs/{ref_id}.{IMAGES[content_type]}"
+                    picture_path = inside(root, root / src)
+                    # Exclusive creation refuses overwriting an existing file.
+                    with open(picture_path, "xb") as out:
+                        out.write(picture)
+                ref = {"id": ref_id, "kind": kind, "src": src, "name": name,
+                       "target": target, "note": "",
+                       "added": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+                data["refs"].append(ref)
+                if request_id is not None:
+                    data.setdefault("refRequests", {})[request_id] = ref["id"]
+                try:
+                    write_user(root, data)
+                except Exception:
+                    if picture is not None:
+                        picture_path.unlink(missing_ok=True)
+                    raise
         self.json_response(200, {"ok": True, "ref": ref})
 
     def change_ref(self, ref_id):
@@ -625,6 +646,8 @@ def wait_answers(root, args):
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("session_dir")
     modes = parser.add_mutually_exclusive_group()

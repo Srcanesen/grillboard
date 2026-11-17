@@ -26,9 +26,9 @@ test('fit zooms a wide tree out', () => {
     { x: 40, y: 383.44, z: .46 });
 });
 
-test('fit clamps zoom to .1 and 1 even for extreme bounds', () => {
+test('fit scales below .1 for extreme bounds and caps zoom at 1', () => {
   assertView(camera.fit([{ x: 0, y: 0, width: 10000, height: 10000 }], screen()),
-    { x: 0, y: -98.6, z: .1 });
+    { x: 141.00518548065418, y: 42.010370961308354, z: .07179896290386917 });
   assertView(camera.fit([{ x: 0, y: 0, width: 1, height: 1 }], screen()),
     { x: 499.5, y: 413.5, z: 1 });
 });
@@ -170,7 +170,7 @@ const baselineFits = [
     expected: {"x": 701.4540942928039, "y": 286.34615384615387, "z": 0.2648883374689826} },
   { name: "active/390x844/open/fit", boxes: activeBoxes,
     screen: {"width": 390, "height": 844, "boardHidden": false, "header": {"right": 374, "bottom": 86.25}, "toolbar": {"right": 270.234375, "top": 266.609375}, "roundBar": {"top": 170.609375}, "specPanel": {"left": 16, "top": 321.609375}},
-    expected: {"x": 218.2, "y": 100.5296875, "z": 0.1} },
+    expected: {"x": 195.095947063689, "y": 128.3143028846154, "z": 0.00041356492969396195} },
   { name: "active/390x844/collapsed/fit", boxes: activeBoxes,
     screen: {"width": 390, "height": 844, "boardHidden": false, "header": {"right": 374, "bottom": 86.25}, "toolbar": {"right": 270.234375, "top": 781}, "roundBar": {"top": 685}, "specPanel": null},
     expected: {"x": 226.05354058721935, "y": 348.2804404145078, "z": 0.13385146804835923} },
@@ -182,7 +182,7 @@ const baselineFits = [
     expected: {"x": 725.3551354113439, "y": 382.156361778232, "z": 0.36791006642820645} },
   { name: "done/390x844/open/fit", boxes: doneBoxes,
     screen: {"width": 390, "height": 844, "boardHidden": false, "header": {"right": 374, "bottom": 86.25}, "toolbar": {"right": 270.234375, "top": 266.609375}, "roundBar": null, "specPanel": {"left": 16, "top": 321.609375}},
-    expected: {"x": 218.2, "y": 171.5796875, "z": 0.1} },
+    expected: {"x": 205.00070260602965, "y": 174.33902337761882, "z": 0.04310647675012775} },
   { name: "done/390x844/collapsed/fit", boxes: doneBoxes,
     screen: {"width": 390, "height": 844, "boardHidden": false, "header": {"right": 374, "bottom": 86.25}, "toolbar": {"right": 270.234375, "top": 781}, "roundBar": null, "specPanel": null},
     expected: {"x": 226.05354058721935, "y": 462.63320379965455, "z": 0.13385146804835923} },
