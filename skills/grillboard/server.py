@@ -128,7 +128,6 @@ def read_user(root):
         if (not isinstance(request_id, str) or not REQUEST_ID.fullmatch(request_id)
                 or not isinstance(ref_id, str) or not REF_ID.fullmatch(ref_id)):
             raise ValueError("Invalid reference request ids in user.js")
-        # Deleted references still consume their request and reference ids.
         highest = max(highest, int(REF_ID.fullmatch(ref_id)[1]))
     counter = data.get("nextId", highest + 1)
     if type(counter) is not int or counter < 1:
@@ -410,14 +409,12 @@ class BoardHandler(BaseHTTPRequestHandler):
             else:
                 ref_id = f"u{data['nextId']}"
                 data["nextId"] += 1
-                # Reserve the id before writing a picture, including across a crash.
                 write_user(root, data)
                 if picture is not None:
                     refs = inside(root, root / "refs")
                     refs.mkdir(exist_ok=True)
                     src = f"refs/{ref_id}.{IMAGES[content_type]}"
                     picture_path = inside(root, root / src)
-                    # Exclusive creation refuses overwriting an existing file.
                     with open(picture_path, "xb") as out:
                         out.write(picture)
                 ref = {"id": ref_id, "kind": kind, "src": src, "name": name,

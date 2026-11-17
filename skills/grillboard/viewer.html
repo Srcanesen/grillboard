@@ -590,7 +590,6 @@
   </script>
   <!-- The camera block is separate from the session block: it knows rectangles, not questions. -->
   <script id="grill-camera">
-    // fit(boxes, screen) -> { x, y, z }, fitting nonempty board rectangles at a positive zoom up to 1.
     // focus(boxes, screen, { minimum }) -> { x, y, z }, keeping a fitting prefix at minimum .7 or .4.
     // isFar(z) -> boolean, whether the view uses the far presentation.
     // boxes: { x, y, width, height }[]; screen: { width, height, boardHidden,
@@ -1427,12 +1426,15 @@
     function readFlow() {
       try { return localStorage.getItem(flowKey) === 'lr' ? 'lr' : 'td'; } catch (_) { return 'td'; }
     }
+    function geometryIdentity(session) {
+      if (!serverMode) return ['disk', sessionUrl];
+      const isLegacyServer = typeof serverSession !== 'string';
+      if (isLegacyServer) return ['legacy', sessionUrl, GrillSession.string(session.title), GrillSession.string(session.idea)];
+      return ['server', serverSession, sessionUrl];
+    }
     function initializeGeometry(session) {
       if (storageKey || !session) return;
-      // Disk URLs identify their directory; legacy servers use the interview's initial identity fields.
-      const identity = JSON.stringify(serverMode ? (typeof serverSession !== 'string'
-        ? ['legacy', sessionUrl, GrillSession.string(session.title), GrillSession.string(session.idea)]
-        : ['server', serverSession, sessionUrl]) : ['disk', sessionUrl]);
+      const identity = JSON.stringify(geometryIdentity(session));
       storageKey = 'grill-board:' + identity; panelWidthKey = 'grill-panel-width:' + identity; sizesKey = 'grill-node-sizes:' + identity;
       manualOffsets = readOffsets(); nodeSizes = readNodeSizes(); panelWidth = readPanelWidth();
     }
@@ -1446,7 +1448,7 @@
         return positions;
       } catch (_) { return Object.create(null); }
     }
-    function saveOffsets() { if (!storageKey) return; try { localStorage.setItem(offsetsKey(), JSON.stringify(manualOffsets)); } catch (_) { /* Storage is optional on disk and in private browsing. */ } }
+    function saveOffsets() { if (!storageKey) return; try { localStorage.setItem(offsetsKey(), JSON.stringify(manualOffsets)); } catch (_) {} }
     function reducedMotion() { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
     function button(text, label, callback, className) {
       const node = element('button', className || '', text);

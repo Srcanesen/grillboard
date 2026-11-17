@@ -43,7 +43,6 @@ test('an older server ignoring reference request ids retains its existing retry 
       window.fetch = async (input, options) => {
         const address = new URL(input);
         if (options?.method === 'POST' && address.pathname === '/api/refs') {
-          // Ignore the new parameter, as older servers do.
           address.searchParams.delete('requestId');
           const response = await originalFetch(address, options);
           if (++refWrites === 1) { await response.text(); throw new TypeError('Response lost after save'); }

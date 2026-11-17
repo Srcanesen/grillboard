@@ -11,7 +11,6 @@ test('external references dropped on the idea highlight it and persist its targe
       window.dropEvent = { bubbles: true, cancelable: true, clientX: rect.x + rect.width / 2,
         clientY: rect.y + rect.height / 2, dataTransfer: dropTransfer };
       card.dispatchEvent(new DragEvent('dragover', dropEvent));`);
-    // Check both hit-testing paths even when hover alone is broken.
     const highlighted = await page.evaluate("document.querySelector('.idea-card').classList.contains('drop-target')");
     await page.evaluate("document.querySelector('.idea-card').dispatchEvent(new DragEvent('drop', dropEvent))");
     await until(() => page.evaluate('currentUserRefs.length === 1'), 'dropped reference');

@@ -247,6 +247,34 @@ class EntryPointTests(unittest.TestCase):
         with response:
             return response.code, response.read()
 
+    def test_deleted_reference_request_keeps_reconstructed_counter_above_its_id(self):
+        body = json.dumps({"url": "https://example.com/source", "target": ""}).encode()
+        headers = {"Content-Type": "application/json"}
+        status, response = self.request("api/refs?requestId=deleted-1", "POST", body, headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(response)["ref"]["id"], "u1")
+        self.assertEqual(self.request("api/refs/u1", "DELETE")[0], 200)
+        data = server.read_user(self.root)
+        self.assertEqual(data["refs"], [])
+        self.assertEqual(data["refRequests"], {"deleted-1": "u1"})
+        data.pop("nextId")
+        server.write_user(self.root, data)
+        status, response = self.request("api/refs", "POST", body, headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(response)["ref"]["id"], "u2")
+
+    def test_picture_write_failure_leaves_reserved_next_id_on_disk(self):
+        refs = self.root / "refs"
+        refs.mkdir()
+        picture = refs / "u1.png"
+        picture.write_bytes(b"existing picture")
+        status, _ = self.request("api/refs", "POST", b"new picture", {"Content-Type": "image/png"})
+        self.assertEqual(status, 500)
+        data = json.loads((self.root / "user.js").read_text()[len(server.PREFIX):].rstrip()[:-1])
+        self.assertEqual(data["nextId"], 2)
+        self.assertEqual(data["refs"], [])
+        self.assertEqual(picture.read_bytes(), b"existing picture")
+
     def test_reference_request_id_replay_preserves_original_reference(self):
         for number, (body, content_type, query) in enumerate([
                 (json.dumps({"url": "https://example.com/source", "target": "idea"}).encode(),

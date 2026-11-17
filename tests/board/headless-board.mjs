@@ -43,6 +43,24 @@ export async function serve(dir, children) {
   assert.match(url, /^http:\/\/127\.0\.0\.1:[0-9]+\/$/, 'Server failed to start: ' + errors);
   return url;
 }
+let commandId = 1000000;
+export function devtoolsCommand(child, method, params = {}, sessionId) {
+  return new Promise((resolve, reject) => {
+    const id = ++commandId; let buffer = '';
+    const timer = setTimeout(() => finish(new Error('Media emulation timed out')), 5000);
+    function finish(error, result) { clearTimeout(timer); child.stdio[4].off('data', read); error ? reject(error) : resolve(result); }
+    function read(bytes) {
+      buffer += bytes.toString(); let index;
+      while ((index = buffer.indexOf('\0')) !== -1) {
+        const message = JSON.parse(buffer.slice(0, index)); buffer = buffer.slice(index + 1);
+        if (message.id === id) finish(message.error && new Error(JSON.stringify(message.error)), message.result);
+      }
+    }
+    child.stdio[4].on('data', read);
+    child.stdio[3].write(JSON.stringify({ id, method, params, sessionId }) + '\0');
+  });
+}
+
 export async function browser(profile, children) {
   for (let attempt = 0; attempt < 2; attempt++) {
     try { return await launchBrowser(profile, children); }
