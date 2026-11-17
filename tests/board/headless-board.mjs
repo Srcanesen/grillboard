@@ -44,12 +44,19 @@ export async function serve(dir, children) {
   return url;
 }
 export async function browser(profile, children) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { return await launchBrowser(profile, children); }
+    catch (error) { if (attempt === 1) throw error; }
+  }
+}
+async function launchBrowser(profile, children) {
   const child = spawn(chromeExecutable, ['--headless=new', '--remote-debugging-pipe', '--no-first-run',
     '--no-default-browser-check', '--disable-background-networking', '--disable-component-update',
     '--disable-sync', '--disable-extensions', '--user-data-dir=' + profile, 'about:blank'],
-  { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
+  { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
   children.push(child);
-  let next = 0, buffer = '', mainFrameId;
+  let next = 0, buffer = '', errors = '', mainFrameId, commandTimeout = 30000;
+  child.stderr.on('data', bytes => errors += bytes);
   const pending = new Map(), contexts = new Map();
   child.stdio[4].on('data', bytes => {
     buffer += bytes.toString();
@@ -79,16 +86,28 @@ export async function browser(profile, children) {
   function call(method, params = {}, sessionId) {
     return new Promise((resolve, reject) => {
       const id = ++next;
-      const timer = setTimeout(() => { pending.delete(id); reject(new Error('CDP timeout: ' + method)); }, 6000);
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error('CDP timeout: ' + method)); }, commandTimeout);
       pending.set(id, { resolve, reject, timer });
       child.stdio[3].write(JSON.stringify({ id, method, params, sessionId }) + '\0');
     });
   }
-  const { targetId } = await call('Target.createTarget', { url: 'about:blank' });
-  const { sessionId } = await call('Target.attachToTarget', { targetId, flatten: true });
+  let sessionId;
+  try {
+    const { targetId } = await call('Target.createTarget', { url: 'about:blank' });
+    ({ sessionId } = await call('Target.attachToTarget', { targetId, flatten: true }));
+    await call('Runtime.enable', {}, sessionId);
+    await call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, sessionId);
+  } catch (error) {
+    for (const request of pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(error);
+    }
+    pending.clear();
+    await stop(child);
+    throw new Error('Chrome startup failed: ' + error.message + '\n' + errors);
+  }
+  commandTimeout = 6000;
   const send = (method, params) => call(method, params, sessionId);
-  await send('Runtime.enable');
-  await send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
   async function evaluate(expression, contextId, targetSessionId = sessionId) {
     const result = await call('Runtime.evaluate', { expression, contextId, returnByValue: true, awaitPromise: true }, targetSessionId);
     assert.equal(result.exceptionDetails, undefined, JSON.stringify(result.exceptionDetails));
