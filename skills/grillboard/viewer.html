@@ -1035,7 +1035,11 @@
         }
         return byQuestion;
       }
-      return { observeSketches, roundKey, linkedQuestion, regionsByQuestion };
+      function regionsToOutline(byQuestion, open, hovered, shown) {
+        if (!open) return new Set();
+        return new Set([...(byQuestion.get(shown) || []), ...(byQuestion.get(hovered) || [])]);
+      }
+      return { observeSketches, roundKey, linkedQuestion, regionsByQuestion, regionsToOutline };
     })();
   </script>
   <script>
@@ -1511,7 +1515,7 @@
     let connectorLayer = null;
     let socketLayer = null;
     let selectedQuestion = '';
-    let hoveredQuestion = '';
+    let hoveredQuestion = '', hoverPoint = null;
     let connection = null;
     const expandedCards = new Set();
     // New questions stay marked until the user touches or answers them: the entry effect alone is easy to miss.
@@ -1723,11 +1727,6 @@
       card.setAttribute('aria-selected', String(selectedQuestion === q.id));
       card.dataset.questionId = q.id;
       card.addEventListener('keydown', event => { if (event.key === 'Enter' && event.target === card) { event.preventDefault(); selectQuestion(q.id); } });
-      card.addEventListener('pointerenter', () => { hoveredQuestion = q.id; syncRegionOutlines(); scheduleLines(); });
-      card.addEventListener('pointerleave', () => {
-        if (hoveredQuestion === q.id) hoveredQuestion = '';
-        syncRegionOutlines(); scheduleLines();
-      });
       const heading = element('header', 'question-header');
       const top = element('div', 'card-top');
       const body = element('div', 'question-body');
@@ -2103,6 +2102,10 @@
     function syncSketchLinks() {
       const surface = workingSketchSurface();
       workingRegions = GrillWorkingSketch.regionsByQuestion(surface?.sketchRegions || [], currentSession.questionsById);
+      if (sketchHover) {
+        const { region, frame } = sketchHover;
+        setSketchHover(frame.isConnected ? linkedSketchRegion(region) : null, frame);
+      }
       let changed = false;
       for (const [id, card] of cardNodes) {
         card.classList.toggle('sketch-linked', id === sketchLinkedQuestion);
@@ -2116,13 +2119,11 @@
           changed = true;
         }
       }
-      syncRegionOutlines();
       return changed;
     }
     function syncRegionOutlines() {
       const record = nodeRecords.get(workingSketch?.nodeId);
-      const next = new Set(record && !record.minimized
-        ? [...(workingRegions.get(shownSketchQuestion) || []), ...(workingRegions.get(hoveredQuestion) || [])] : []);
+      const next = GrillWorkingSketch.regionsToOutline(workingRegions, !!record && !record.minimized, hoveredQuestion, shownSketchQuestion);
       for (const region of outlinedRegions) if (!next.has(region)) region.classList.remove('grill-region-outlined');
       for (const region of next) if (!outlinedRegions.has(region)) region.classList.add('grill-region-outlined');
       outlinedRegions = next;
@@ -2139,9 +2140,11 @@
       syncRegionOutlines();
       regions[0].scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
     }
-    function clearSketchLinks() {
-      cardNodes.get(sketchLinkedQuestion)?.classList.remove('sketch-linked');
-      sketchLinkedQuestion = '';
+    function clearSketchLinks(clickedQuestion) {
+      if (sketchLinkedQuestion && sketchLinkedQuestion !== clickedQuestion) {
+        cardNodes.get(sketchLinkedQuestion)?.classList.remove('sketch-linked');
+        sketchLinkedQuestion = '';
+      }
       if (shownSketchQuestion) {
         shownSketchQuestion = '';
         syncRegionOutlines();
@@ -2150,9 +2153,15 @@
     function questionForRegion(region) {
       return region ? GrillWorkingSketch.linkedQuestion(region.getAttribute('data-q'), currentSession.questionsById) : '';
     }
+    function linkedSketchRegion(target) {
+      for (let region = target?.closest?.('[data-q]'); region; region = region.parentElement?.closest('[data-q]')) {
+        if (questionForRegion(region)) return region;
+      }
+      return null;
+    }
     function followSketchRegion(region) {
       const id = questionForRegion(region), record = nodeRecords.get(id);
-      if (!record) return;
+      if (!record) return false;
       if (!lightbox.hidden) closeLightbox();
       setSketchHover(null);
       recordInteraction();
@@ -2160,6 +2169,7 @@
       sketchLinkedQuestion = id;
       record.element.classList.add('sketch-linked');
       glideView(GrillCamera.focus([cameraBox(record)], measureScreen(), { minimum: .4, padding: 32 }), true);
+      return true;
     }
     function setSketchHover(region, frame) {
       if (sketchHover?.region === region && sketchHover?.frame === frame) return;
@@ -2179,16 +2189,27 @@
       const box = surface.getBoundingClientRect();
       const x = (event.clientX - box.left) * surface.clientWidth / box.width;
       const y = (event.clientY - box.top) * surface.clientHeight / box.height;
-      const region = surface.contentDocument?.elementFromPoint(x, y)?.closest('[data-q]');
+      const region = linkedSketchRegion(surface.contentDocument?.elementFromPoint(x, y));
       return { region, frame };
     }
+    function questionAt(target) { return target?.closest?.('.question-card')?.dataset.questionId || ''; }
+    function updateCardHover(event) {
+      hoverPoint = event && event.pointerType !== 'touch' ? { x: event.clientX, y: event.clientY } : null;
+      const id = hoverPoint ? questionAt(event.target) : '';
+      if (id === hoveredQuestion) return;
+      hoveredQuestion = id; syncRegionOutlines(); scheduleLines();
+    }
+    document.addEventListener('pointerover', updateCardHover);
     document.addEventListener('pointermove', event => {
+      updateCardHover(event);
       const { region, frame } = canvasSketchHit(event);
-      setSketchHover(questionForRegion(region) ? region : null, frame);
+      setSketchHover(region, frame);
     });
-    document.addEventListener('pointerleave', () => setSketchHover(null));
+    document.addEventListener('pointerleave', () => { updateCardHover(); setSketchHover(null); });
     document.addEventListener('click', event => {
-      if (!canvas.contains(event.target) || !event.detail || Date.now() >= suppressClickUntil) clearSketchLinks();
+      // The canvas already handled captured clicks using their original question.
+      if (event.detail && canvas.contains(event.target) && (event.target === canvas || Date.now() < suppressClickUntil)) return;
+      clearSketchLinks(questionAt(event.target));
     }, true);
     function bindSketchRegions(surface, frame, doc) {
       if (location.protocol === 'file:') return;
@@ -2211,19 +2232,18 @@
       }
       if (lightbox.contains(surface)) {
         doc?.addEventListener('pointermove', event => {
-          const region = event.target.closest?.('[data-q]');
-          setSketchHover(questionForRegion(region) ? region : null, frame);
+          setSketchHover(linkedSketchRegion(event.target), frame);
         });
         doc?.addEventListener('pointerleave', () => setSketchHover(null));
         doc?.addEventListener('click', event => {
           clearSketchLinks();
-          const region = event.target.closest?.('[data-q]');
-          if (!questionForRegion(region)) return;
-          event.preventDefault();
-          followSketchRegion(region);
+          if (followSketchRegion(linkedSketchRegion(event.target))) event.preventDefault();
         }, true);
       }
-      if (surface === workingSketchSurface() && syncSketchLinks()) measureAndLayout();
+      if (surface === workingSketchSurface()) {
+        if (syncSketchLinks()) measureAndLayout();
+        syncRegionOutlines();
+      }
     }
     function sketchUrl(sketch) {
       const url = new URL(safeSource(sketch.src), sessionUrl);
@@ -2481,7 +2501,6 @@
       renderSpec(data, labels); spec.scrollTop = scrollTop;
       renderToolbar(); updateSpec();
       world.setAttribute('role', 'tree'); world.setAttribute('aria-label', data.title || labels.idea);
-      hoveredQuestion = '';
       const previousNodes = nodeRecords;
       cardNodes = new Map(); nodeRecords = new Map();
       connectorLayer = document.createElementNS(svgNamespace, 'svg');
@@ -2591,7 +2610,11 @@
       }
       refreshAnswerControls();
       for (const editor of world.querySelectorAll('.answer-editor')) growAnswer(editor);
-      syncSketchLinks(); saveNodeSizes(); measureAndLayout(); selectQuestion(selectedQuestion);
+      syncSketchLinks(); saveNodeSizes(); measureAndLayout();
+      // A reused or rebuilt card can still be under the same stationary pointer.
+      const hoverTarget = hoverPoint && document.elementFromPoint(hoverPoint.x, hoverPoint.y);
+      hoveredQuestion = questionAt(hoverTarget);
+      syncRegionOutlines(); selectQuestion(selectedQuestion);
       if (focusId && nodeRecords.has(focusId) && !focused.isConnected) {
         const node = nodeRecords.get(focusId).element;
         const editor = answerFocus && node.querySelector('.answer-editor');
@@ -3357,6 +3380,7 @@
         const target = canceled ? '' : connectionTargetAt(event.clientX, event.clientY);
         if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
         suppressClickUntil = Date.now() + 500; clearDropTarget(); scheduleLines();
+        if (!canceled && !ended.moved) clearSketchLinks();
         // Pulling the cable out and dropping it on the empty board disconnects; a plain click on the handle does not.
         const pulledOut = !canceled && !target && ended.moved && ended.record.ref.target && !offBoard(event.clientX, event.clientY);
         if (target || pulledOut) {
@@ -3395,12 +3419,11 @@
           }
         }
       } else if (!canceled) {
-        clearSketchLinks();
+        clearSketchLinks(ended.question);
         selectQuestion(ended.question || '');
         if (ended.record && ended.record.kind === 'report') openReader(ended.record.note.id);
-        if (ended.sketchRegion) {
+        if (ended.sketchRegion && followSketchRegion(linkedSketchRegion(ended.sketchRegion))) {
           suppressClickUntil = Date.now() + 500;
-          followSketchRegion(ended.sketchRegion);
         } else if (ended.record?.kind === 'sketch') activateSketch(ended.record.id);
         if (ended.answerControl) {
           suppressClickUntil = Date.now() + 500; chooseAnswer(ended.question, ended.answerControl.dataset.answerOption);

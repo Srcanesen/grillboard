@@ -17,7 +17,7 @@ const toggle = '[data-sketch-id="home"] .sketch-toggle';
 const iframe = id => `[data-sketch-id="${id}"] iframe`;
 const query = selector => `document.querySelector(${JSON.stringify(selector)})`;
 const main = query(iframe('home')) + '.contentDocument';
-const region = '<p id="first" data-q="Q8"><span>Layout placeholder</span></p>';
+const region = '<p id="first" data-q="Q8"><span data-q="Q404">Layout placeholder</span></p>';
 const unknown = '<p id="unknown" data-q="Q404">Unknown question</p>';
 const geometry = 'getBoundingClientRect().toJSON()';
 
@@ -59,7 +59,17 @@ test('sketch regions are grouped in document order by known question id', () => 
   ]);
 });
 
-browserTest('clicking a nested region in a second sketch glides to its card and rings it until another click', async () => {
+test('an open sketch outlines the union of the hovered and selected regions', () => {
+  const { regionsToOutline } = loadBlock('grill-working-sketch', 'GrillWorkingSketch');
+  const byQuestion = new Map([['q8', ['first', 'second']], ['q9', ['third']]]);
+  assert.deepEqual([...regionsToOutline(byQuestion, false, 'q8', 'q9')], []);
+  assert.deepEqual([...regionsToOutline(byQuestion, true, 'q8', '')], ['first', 'second']);
+  assert.deepEqual([...regionsToOutline(byQuestion, true, 'q9', 'q8')], ['first', 'second', 'third']);
+  assert.deepEqual([...regionsToOutline(byQuestion, true, 'q8', 'q8')], ['first', 'second']);
+  assert.deepEqual([...regionsToOutline(byQuestion, true, 'q404', 'q8')], ['first', 'second']);
+});
+
+browserTest('a linked region glides to its card, which stays ringed through clicks on or inside it', async () => {
   const data = { title: 'Recipe box', questions };
   await withBoard(data, async ({ root, page, session }) => {
     await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
@@ -88,6 +98,12 @@ browserTest('clicking a nested region in a second sketch glides to its card and 
     const [width, height] = await page.evaluate('[innerWidth, innerHeight]');
     assert.ok(box.left >= 0 && box.right <= width && box.top >= 0 && box.bottom <= height, JSON.stringify(box));
     assert.equal(await page.evaluate(`getComputedStyle(${query(card)}).outlineStyle`), 'solid');
+    await page.click(card + ' .question-title');
+    assert.equal(await page.evaluate(query(card) + '.getAttribute("aria-selected")'), 'true');
+    assert.deepEqual(await ringed(page), ['q8']);
+    await page.click(card + ' .details-toggle');
+    assert.equal(await page.evaluate(query(card + ' .details-toggle') + '.getAttribute("aria-expanded")'), 'true');
+    assert.deepEqual(await ringed(page), ['q8']);
     await click(page, { x: 2, y: 2 });
     assert.deepEqual(await ringed(page), []);
   });
@@ -120,12 +136,14 @@ browserTest('showing a decision opens the minimized working sketch, scrolls its 
       const doc = ${main}, region = doc.querySelector('#first'), box = region.getBoundingClientRect();
       return doc.scrollingElement.scrollTop > 0 && box.top >= 0 && box.bottom <= doc.documentElement.clientHeight;
     })()`), true);
+    await session({ ...data, title: 'Updated recipe box', sketches: [working] });
+    assert.deepEqual(await outlined(page), ['first', 'second']);
     await click(page, { x: 2, y: 2 });
     assert.deepEqual(await outlined(page), []);
   });
 });
 
-browserTest('card hover outlines temporarily and revisions update which cards have controls', async () => {
+browserTest('card hover survives session updates and revisions update which cards have controls', async () => {
   const data = { lang: 'en', title: 'Recipe box', questions };
   await withBoard(data, async ({ root, page, session }) => {
     await writeFile(root + '/home.html', '<!doctype html>' + region + '<p id="second" data-q="q8">Second</p>' + unknown);
@@ -137,23 +155,49 @@ browserTest('card hover outlines temporarily and revisions update which cards ha
     const { x, y, width, height } = await page.evaluate(query(card) + '.' + geometry);
     await move(page, { x: x + width / 2, y: y + height / 2 });
     assert.deepEqual(await outlined(page), ['first', 'second']);
+    await session({ ...data, title: 'Updated recipe box', sketches: [working] });
+    assert.deepEqual(await outlined(page), ['first', 'second']);
+    const updated = { ...data, questions: [{ ...questions[0], title: 'Updated layout' }, questions[1]] };
+    await session({ ...updated, sketches: [working] });
+    assert.deepEqual(await outlined(page), ['first', 'second']);
     await move(page, { x: 2, y: 2 });
     assert.deepEqual(await outlined(page), []);
-
-    await showFrame(page, 'home');
-    const point = await pointInFrame(page, iframe('home'), '#unknown');
-    const before = await page.evaluate('({...view})');
-    await move(page, point);
-    assert.deepEqual(await outlined(page), []);
-    await click(page, point);
-    assert.deepEqual(await ringed(page), []);
-    assert.equal(await page.evaluate('lightbox.hidden'), true);
-    assert.deepEqual(await page.evaluate('({...view})'), before);
 
     await writeFile(root + '/home.html', '<!doctype html><p data-q="Q9">New sign-in region</p>');
     await session({ ...data, sketches: [{ ...working, rev: 3 }] });
     await until(() => page.evaluate('!!document.querySelector(\'[data-question-id="q9"] .show-in-sketch\')'), 'new region link');
     assert.deepEqual(await page.evaluate('[...document.querySelectorAll(".show-in-sketch")].map(control => control.closest(".question-card").dataset.questionId)'), ['q9']);
+  });
+});
+
+browserTest('unknown and stale tags have the same hover and click behavior as an unmarked region', async () => {
+  const data = { title: 'Recipe box', questions };
+  await withBoard(data, async ({ root, page, session }) => {
+    await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+    await writeFile(root + '/home.html', '<!doctype html>' + region + unknown + '<p id="unmarked">Unmarked</p>');
+    const sketches = [working];
+    await session({ ...data, sketches });
+    const cursor = `getComputedStyle(${query(iframe('home'))}.parentElement).cursor`;
+    async function assertEnlarges(selector) {
+      await showFrame(page, 'home');
+      const point = await pointInFrame(page, iframe('home'), selector);
+      await move(page, point);
+      assert.equal(await page.evaluate(cursor), 'grab');
+      assert.deepEqual(await outlined(page), []);
+      await click(page, point);
+      assert.equal(await page.evaluate('lightbox.hidden'), false, selector);
+      assert.deepEqual(await ringed(page), []);
+      await page.key('Escape');
+    }
+    await assertEnlarges('#unmarked');
+    await assertEnlarges('#unknown');
+    await showFrame(page, 'home');
+    await move(page, await pointInFrame(page, iframe('home'), '#first span'));
+    assert.equal(await page.evaluate(cursor), 'pointer');
+    await session({ ...data, questions: [questions[1]], sketches });
+    assert.equal(await page.evaluate(cursor), 'grab');
+    assert.deepEqual(await outlined(page), []);
+    await assertEnlarges('#first span');
   });
 });
 
