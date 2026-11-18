@@ -66,12 +66,12 @@ test('the working sketch clears a later branch using final positions and its cur
   assert.deepEqual(chip.positions[id], { x: 362, y: 308 });
 });
 
-test('a dragged working sketch keeps its position even when it overlaps another card', () => {
+test('a dragged sketch position is the starting candidate and is moved clear of placed nodes', () => {
   const id = 'sketch:main';
   const result = layout.layout(input([
     question('q1'), question('q2'), { id, kind: 'sketch', width: 380, height: 760 }
   ], { workingSketch: { id, askingIds: ['q1'], position: { x: 14, y: 144 } } }));
-  assert.deepEqual(result.positions[id], { x: 14, y: 144 });
+  assert.deepEqual(result.positions[id], { x: 362, y: 144 });
 });
 
 test('the working sketch clears board-column items and a parked sketch moved into its path', () => {

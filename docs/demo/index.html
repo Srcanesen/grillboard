@@ -162,6 +162,8 @@
     .node { position: absolute; margin: 0; cursor: grab; }
     .question-card { width: 300px; max-width: none; }
     .question-card.picture-options { width: 460px; }
+    .question-card.manually-sized { display: flex; flex-direction: column; }
+    .question-card.manually-sized .question-body { flex: 1 0 auto; }
     .question-card.selected { outline: 2px solid var(--accent); outline-offset: 2px; }
     .question-card.sketch-linked { outline: max(3px, calc(3px / var(--z, 1))) solid var(--accent); outline-offset: 3px; }
     .question-card.drop-target, .idea-card.drop-target { box-shadow: 0 0 0 4px var(--accent-tint); border-color: var(--accent); }
@@ -237,7 +239,7 @@
     .step-dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--amber); animation: research-pulse 1.4s ease-in-out infinite; }
     @keyframes research-pulse { 50% { opacity: .3; } }
     @media (prefers-reduced-motion: reduce) { .step-dot { animation: none; } }
-    .report-card { width: 240px; padding: 12px; background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--violet); border-radius: var(--radius); box-shadow: var(--shadow); }
+    .report-card { isolation: isolate; width: 240px; padding: 12px; background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--violet); border-radius: var(--radius); box-shadow: var(--shadow); }
     .report-card h3 { margin: 8px 0; font-size: 13px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
     .report-card .report-finding { color: var(--muted); font-size: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; }
     .report-card footer { color: var(--muted); font-size: 12px; margin-top: 8px; }
@@ -259,20 +261,15 @@
     .reader-column th, .reader-column td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
     .reader-column hr { border: 0; border-top: 1px solid var(--border); }
     /* Resize strips affect hit testing only; grips reserve no layout space. */
-    .node-resize { position: absolute; border: 0; padding: 0; background: transparent; color: var(--muted); touch-action: none; z-index: 4; }
-    /* Grab areas keep their size on screen when the board is zoomed out. */
-    .resize-edge { --strip: min(calc(8px / var(--z, 1)), 24px); }
-    .resize-w, .resize-e { top: 8px; bottom: 8px; width: var(--strip); cursor: ew-resize; }
-    .resize-w { left: calc(var(--strip) / -2); }
-    .resize-e { right: calc(var(--strip) / -2); }
-    .resize-n, .resize-s { left: 8px; right: 8px; height: var(--strip); cursor: ns-resize; }
-    .resize-n { top: calc(var(--strip) / -2); }
-    .resize-s { bottom: calc(var(--strip) / -2); }
-    .resize-corner { --grip: min(calc(16px / var(--z, 1)), 40px); width: var(--grip); height: var(--grip); opacity: 0; }
-    .resize-nw, .resize-ne { top: 0; }
-    .resize-sw, .resize-se { bottom: 0; }
-    .resize-nw, .resize-sw { left: 0; }
-    .resize-ne, .resize-se { right: 0; }
+    .node-resize { --grip: min(calc(10px / var(--z, 1)), var(--resize-limit, 25px)); position: absolute; border: 0; padding: 0; background: transparent; color: var(--muted); touch-action: none; z-index: 4; }
+    /* Keep hit areas inside the card and leave the corners to their own squares. */
+    .resize-w, .resize-e { top: var(--grip); bottom: var(--grip); width: var(--grip); cursor: ew-resize; }
+    .resize-w, .resize-nw, .resize-sw { left: 0; }
+    .resize-e, .resize-ne, .resize-se { right: 0; }
+    .resize-n, .resize-s { left: var(--grip); right: var(--grip); height: var(--grip); cursor: ns-resize; }
+    .resize-n, .resize-nw, .resize-ne { top: 0; }
+    .resize-s, .resize-sw, .resize-se { bottom: 0; }
+    .resize-corner { width: var(--grip); height: var(--grip); opacity: 0; }
     .resize-nw, .resize-se { cursor: nwse-resize; }
     .resize-ne, .resize-sw { cursor: nesw-resize; }
     .resize-corner::after { content: ''; position: absolute; inset: 30%; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; }
@@ -280,7 +277,7 @@
     .resize-ne::after { transform: rotate(270deg); }
     .resize-sw::after { transform: rotate(90deg); }
     .node:hover > .resize-corner, .node:focus-within > .resize-corner { opacity: 1; }
-    @media (pointer: coarse) { .resize-edge { --strip: min(calc(16px / var(--z, 1)), 48px); } .resize-se { opacity: .4; } }
+    @media (pointer: coarse) { .resize-se { opacity: .4; } }
     .toolbar { position: fixed; bottom: 16px; left: 16px; display: flex; align-items: center; gap: 4px; padding: 6px; z-index: 5; }
     .toolbar button, .icon-button { border: 0; background: transparent; padding: 6px 9px; border-radius: var(--radius-small); }
     .toolbar button:hover, .icon-button:hover { background: var(--panel); }
@@ -326,6 +323,9 @@
     @media (prefers-reduced-motion: reduce) { .research-chip.highlight { animation: none; } }
     .reference-picture { border: 0; padding: 0; width: 100%; background: var(--panel); border-radius: var(--radius-small); cursor: zoom-in; display: block; }
     .reference-picture img { display: block; width: 100%; height: 160px; object-fit: contain; }
+    .reference-card.manually-sized:has(.reference-picture) { display: flex; flex-direction: column; align-items: flex-start; }
+    .reference-card.manually-sized .reference-picture { flex: 1 0 auto; position: relative; }
+    .reference-card.manually-sized .reference-picture img { position: absolute; inset: 0; height: 100%; }
     .ref-note { margin: 7px 0 0; font-size: 12px; white-space: pre-wrap; }
     button.ref-note { display: block; text-align: left; border: 0; padding: 0; background: none; width: 100%; cursor: text; }
     .ref-note.placeholder { color: var(--muted); }
@@ -347,6 +347,7 @@
       .live-dot.changed { animation: none; box-shadow: 0 0 0 3px var(--accent-tint); }
     }
     /* Far labels change paint only; normal content continues to reserve its space. */
+    #world.far .node-resize { display: none; }
     .far-label { display: none; position: absolute; inset: 0; padding: 16px; overflow: hidden; overflow-wrap: anywhere; pointer-events: none; font-size: min(calc(12px / var(--z, 1)), var(--far-max, 36px)); font-weight: 600; line-height: 1.25; }
     #world.far .question-card > :not(.far-label):not(.node-resize),
     #world.far .idea-card > :not(.far-label):not(.node-resize) { visibility: hidden; }
@@ -712,7 +713,8 @@
   </script>
   <!-- The layout block knows node kinds and sizes, not the page: sizes in, positions out. -->
   <script id="grill-layout">
-    // layout({ nodes, flow, constants, manualOffsets?, workingSketch? }) -> read-only board placement.
+    // layout({ nodes, flow, constants, manualOffsets?, workingSketch?, origin?, anchor? }) -> read-only board placement.
+    // The origin translates the whole placement. An anchor { id, x, y } sets the origin so the named node lands there.
     // workingSketch: { id, askingIds, position? }; position is a drag override in board coordinates.
     // cluster({ node, refs, reports, flow, manualOffsets? }) -> { width, height, positions, outputId } for one card and its attachments; node may carry x/y, reports may carry live x/y.
     // cluster positions include direct attachment offsets; outputId is the lowest card/report without a direct report offset.
@@ -760,7 +762,7 @@
         }
         return freeze({ width, height, positions, outputId });
       }
-      function layout({ nodes: inputNodes, flow, constants: LAYOUT, manualOffsets = {}, workingSketch }) {
+      function layout({ nodes: inputNodes, flow, constants: LAYOUT, manualOffsets = {}, workingSketch, origin = { x: 0, y: 0 }, anchor }) {
         const nodes = copy(inputNodes);
         const positions = Object.create(null), parents = Object.create(null), secondary = Object.create(null);
         const idea = nodes.find(node => node.kind === 'idea') || { id: '@idea', width: LAYOUT.ideaWidth, height: 80 };
@@ -852,10 +854,12 @@
           const card = byId.get(id), item = items.get(id);
           return card ? [card, ...item.refs, ...item.reports] : [];
         }) : [];
-        const parkedSketches = roundNodes.length || (working && workingSketch.position) ? sketches.filter(sketch => sketch !== working) : sketches;
-        function besideRound(obstacles = []) {
+        const draggedPosition = working && workingSketch.position;
+        const placeWorking = roundNodes.length || draggedPosition;
+        const parkedSketches = placeWorking ? sketches.filter(sketch => sketch !== working) : sketches;
+        function placeWorkingSketch(obstacles = []) {
           const gap = LAYOUT.sketchRoundGap;
-          const point = flow === 'lr'
+          const point = draggedPosition ? copy(draggedPosition) : flow === 'lr'
             ? { x: Math.min(...roundNodes.map(node => positions[node.id].x)), y: Math.max(...roundNodes.map(node => positions[node.id].y + node.height)) + gap }
             : { x: Math.max(...roundNodes.map(node => positions[node.id].x + node.width)) + gap, y: Math.min(...roundNodes.map(node => positions[node.id].y)) };
           const axis = flow === 'lr' ? 'y' : 'x';
@@ -890,8 +894,7 @@
           }
         }
         for (const sketch of sketches) parents[sketch.id] = idea.id;
-        if (roundNodes.length) positions[working.id] = besideRound();
-        else if (working && workingSketch.position) positions[working.id] = copy(workingSketch.position);
+        if (placeWorking) positions[working.id] = placeWorkingSketch();
         const boardRefs = refs.filter(ref => !positions[ref.id]);
         const boardResearch = nodes.filter(node => node.kind === 'research' && !byId.has(node.parsedTarget?.questionId));
         const boardReports = reports.filter(report => !positions[report.id]);
@@ -912,8 +915,8 @@
           }
         }
         for (const report of boardReports) if (!placedReports.has(report.id)) placeBoardItem(report);
-        const obstacles = roundNodes.length ? [idea, ...questions, ...refs, ...reports, ...boardResearch, ...parkedSketches] : [];
-        if (roundNodes.length) positions[working.id] = besideRound(obstacles);
+        const obstacles = placeWorking ? [idea, ...questions, ...refs, ...reports, ...boardResearch, ...parkedSketches] : [];
+        if (placeWorking) positions[working.id] = placeWorkingSketch(obstacles);
         const basePositions = copy(positions);
         for (const [nodeId, point] of Object.entries(positions)) {
           let dx = 0, dy = 0, id = nodeId;
@@ -924,9 +927,17 @@
           }
           point.x += dx; point.y += dy;
         }
-        if (working && workingSketch.position) positions[working.id] = copy(workingSketch.position);
-        else if (roundNodes.length) positions[working.id] = besideRound(obstacles);
-        return freeze({ flow, positions, basePositions, parents, secondary, clusters, levels, edges, boardRefs, boardResearch, boardRefX, researchCaptionY, boardReports, sketches: sketches.map(node => node.id) });
+        if (placeWorking) positions[working.id] = placeWorkingSketch(obstacles);
+        const placed = anchor && positions[anchor.id];
+        const translation = placed ? { x: anchor.x - placed.x, y: anchor.y - placed.y } : { ...origin };
+        if (translation.x || translation.y) {
+          for (const point of [...Object.values(positions), ...Object.values(basePositions), ...clusters]) {
+            point.x += translation.x; point.y += translation.y;
+          }
+        }
+        return freeze({ flow, positions, basePositions, parents, secondary, clusters, levels, edges, boardRefs, boardResearch,
+          boardRefX: boardRefX + translation.x, researchCaptionY: researchCaptionY + translation.y, boardReports,
+          sketches: sketches.map(node => node.id), origin: translation });
       }
 
       function motion(previous, current) {
@@ -2672,7 +2683,7 @@
       nodeRecords.set(id, record);
       addResizeHandle(record); applyNodeSize(record);
     }
-    // Saved widths affect content geometry; live resizing keeps every other node still.
+    // Older cards saved just a width; sketches save a viewport and scale.
     function readNodeSizes() {
       const sizes = Object.create(null);
       if (!sizesKey) return sizes;
@@ -2680,8 +2691,9 @@
         const saved = GrillSession.object(JSON.parse(localStorage.getItem(sizesKey) || '{}'));
         for (const [id, size] of Object.entries(saved)) {
           if (typeof size === 'number' && Number.isFinite(size)) sizes[id] = size;
-          else if (GrillSession.parseNodeId(id).kind === 'sketch' && size && ['width', 'height', 'scale'].every(key => typeof size[key] === 'number' && Number.isFinite(size[key]) && size[key] > 0)) {
-            sizes[id] = { width: size.width, height: size.height, scale: size.scale };
+          else if (Number.isFinite(size?.width) && size.width > 0 && Number.isFinite(size.height) && size.height > 0) {
+            if (GrillSession.parseNodeId(id).kind !== 'sketch') sizes[id] = { width: size.width, height: size.height };
+            else if (Number.isFinite(size.scale) && size.scale > 0) sizes[id] = { width: size.width, height: size.height, scale: size.scale };
           }
         }
       } catch (_) {}
@@ -2700,11 +2712,13 @@
       if (record.kind === 'research' || record.kind === 'report') return 240;
       return record.element.classList.contains('picture-options') ? 460 : LAYOUT.questionWidth;
     }
+    function minimumNodeWidth(record) {
+      return record.kind === 'sketch' ? 160 : record.kind === 'reference' && isPicture(record.ref) ? 120 : 200;
+    }
     function boundedNodeWidth(record, width) {
       const picture = record.kind === 'reference' && isPicture(record.ref);
-      const min = record.kind === 'sketch' ? 160 : picture ? 120 : 200;
       const max = record.kind === 'sketch' ? 1200 : picture ? 900 : 720;
-      return Math.max(min, Math.min(max, width));
+      return Math.max(minimumNodeWidth(record), Math.min(max, width));
     }
     // Legacy sketch widths mean a scale at the session's original viewport.
     function sketchSize(record) {
@@ -2745,12 +2759,21 @@
         entry.viewport.textContent = interpolate(currentLabels.viewportSize, { width: Math.round(size.width), height: Math.round(size.height) });
         entry.viewport.hidden = !(nodeResize && nodeResize.record.id === record.id) && size.width === record.sketch.width && size.height === record.sketch.height;
       } else {
-        const width = saved ? boundedNodeWidth(record, nodeSizes[record.id]) : defaultNodeWidth(record);
-        if (saved) nodeSizes[record.id] = width;
-        record.element.style.width = width + 'px';
+        const size = nodeSizes[record.id], manual = saved && typeof size === 'object';
+        const width = manual ? Math.max(minimumNodeWidth(record), size.width)
+          : saved ? boundedNodeWidth(record, size) : defaultNodeWidth(record);
+        if (saved && !manual) nodeSizes[record.id] = width;
+        const node = record.element;
+        const widthChanged = node.style.width !== width + 'px';
+        node.classList.toggle('manually-sized', manual);
+        node.style.width = width + 'px';
+        // A floor on the height leaves the content free to grow when it wraps.
+        node.style.minHeight = manual ? size.height + 'px' : '';
+        if (widthChanged) for (const editor of node.querySelectorAll('.answer-editor')) growAnswer(editor);
         if (record.kind === 'reference' && isPicture(record.ref)) {
-          const image = record.element.querySelector('.reference-picture img');
-          if (image) image.style.height = 160 * (width - 18) / 182 + 'px';
+          const picture = node.querySelector('.reference-picture'), image = picture.firstElementChild;
+          picture.style.minHeight = manual ? (160 * (Math.min(width, 200) - 18) / 182) + 'px' : '';
+          image.style.height = manual ? '' : (160 * (width - 18) / 182) + 'px';
         }
       }
     }
@@ -2759,6 +2782,8 @@
       const horizontal = state.edge.includes('w') || state.edge.includes('e');
       const vertical = state.edge.includes('n') || state.edge.includes('s');
       const x = west ? -dx : dx, y = north ? -dy : dy;
+      if (!state.changed && !(horizontal && x) && !(vertical && y)) return;
+      state.changed = true;
       if (record.kind === 'sketch') {
         const size = { ...state.size }, html = sketchNodes.get(record.sketch.id).embedded.surface.tagName === 'IFRAME';
         // An edge or a corner changes the sketch's viewport; a corner dragged with Shift scales the preview.
@@ -2776,47 +2801,40 @@
         }
         nodeSizes[record.id] = size;
       } else {
-        let change = x;
-        if (record.kind === 'reference' && isPicture(record.ref)) {
-          const width = state.width - 18, height = 160 * width / 182;
-          change = horizontal && vertical ? width * (x * width + y * height) / (width * width + height * height)
-            : horizontal ? x : y * width / height;
-        }
-        nodeSizes[record.id] = boundedNodeWidth(record, state.width + change);
+        nodeSizes[record.id] = {
+          width: Math.max(minimumNodeWidth(record), Math.round(state.width + (horizontal ? x : 0))),
+          height: Math.max(1, Math.round(state.height + (vertical ? y : 0)))
+        };
       }
       applyNodeSize(record);
-      record.width = record.element.offsetWidth; record.height = record.element.offsetHeight;
-      record.x = west ? state.right - record.width : state.left;
-      record.y = north ? state.bottom - record.height : state.top;
-      placeNode(record);
-      if (record.kind === 'question') {
-        const cluster = graph.clusters.find(item => item.id === record.id);
-        const reports = cluster.reports.map(report => nodeRecords.get(report.id));
-        for (const child of reports) {
-          applyNodeSize(child); child.width = child.element.offsetWidth; child.height = child.element.offsetHeight;
-        }
-        const refs = cluster.refs.map(ref => nodeRecords.get(ref.id));
-        const geometry = GrillLayout.cluster({ node: record, reports, refs, flow, manualOffsets });
-        for (const child of reports.concat(flow === 'lr' ? refs : [])) {
-          Object.assign(child, geometry.positions[child.id]); placeNode(child);
-        }
-      }
-      drawLines();
+      measureAndLayout({ id: record.id, x: west ? state.right - record.element.offsetWidth : state.left,
+        y: north ? state.bottom - record.element.offsetHeight : state.top });
+    }
+    function paintNodeResize(state) {
+      state.frame = null;
+      const { clientX, clientY, shiftKey } = state.latest;
+      state.scaling = state.edge.length === 2 && shiftKey;
+      resizeNodeLive(state, (clientX - state.x) / state.zoom, (clientY - state.y) / state.zoom);
     }
     function finishNodeResize(event) {
       if (!nodeResize || nodeResize.pointerId !== event.pointerId) return;
-      const ended = nodeResize; nodeResize = null;
+      const ended = nodeResize;
+      if (ended.frame !== null) {
+        cancelAnimationFrame(ended.frame); paintNodeResize(ended);
+      }
+      nodeResize = null;
       if (ended.handle.hasPointerCapture(event.pointerId)) ended.handle.releasePointerCapture(event.pointerId);
-      applyNodeSize(ended.record); saveNodeSizes(); measureAndLayout(); renderLatest();
+      const { record, changed } = ended;
+      if (changed && record.kind !== 'sketch') nodeSizes[record.id].height = record.height;
+      applyNodeSize(record); saveNodeSizes();
+      measureAndLayout(); renderLatest();
     }
     function addResizeHandle(record) {
       const node = record.element;
       if (node.resizeHandle) { node.resizeHandle.setAttribute('aria-label', currentLabels.resize); node.resizeHandle.title = currentLabels.resize; return; }
-      const proportional = record.kind === 'sketch' || (record.kind === 'reference' && isPicture(record.ref));
       const primary = record.kind === 'sketch' ? 'ne' : 'se';
-      const edges = proportional ? ['w', 'e', 'n', 's', 'nw', 'ne', 'sw', 'se'] : ['w', 'e', 'nw', 'ne', 'sw', 'se'];
-      for (const edge of edges) {
-        const className = 'node-resize resize-' + edge + (edge.length === 1 ? ' resize-edge' : ' resize-corner');
+      for (const edge of ['w', 'e', 'n', 's', 'nw', 'ne', 'sw', 'se']) {
+        const className = 'node-resize resize-' + edge + (edge.length === 2 ? ' resize-corner' : '');
         const handle = edge === primary ? button('', currentLabels.resize, null, className) : element('div', className);
         handle.dataset.resize = edge;
         if (edge === primary) node.resizeHandle = handle;
@@ -2827,17 +2845,18 @@
           event.preventDefault(); event.stopPropagation(); cancelGlide(); recordInteraction();
           const current = nodeRecords.get(record.id); if (!current) return;
           nodeResize = { pointerId: event.pointerId, handle, record: current, edge, x: event.clientX, y: event.clientY,
-            width: current.width, size: current.kind === 'sketch' ? sketchSize(current) : null,
-            left: current.x, top: current.y, right: current.x + current.width, bottom: current.y + current.height, zoom: view.z };
+            width: current.width, height: current.height, size: current.kind === 'sketch' ? sketchSize(current) : null,
+            left: current.x, top: current.y, right: current.x + current.width, bottom: current.y + current.height, zoom: view.z, frame: null };
           handle.setPointerCapture(event.pointerId);
           if (edge === primary) handle.focus({ preventScroll: true });
           applyNodeSize(current);
         });
         handle.addEventListener('pointermove', event => {
-          if (!nodeResize || nodeResize.handle !== handle || nodeResize.pointerId !== event.pointerId) return;
+          const state = nodeResize;
+          if (!state || state.handle !== handle || state.pointerId !== event.pointerId) return;
           event.preventDefault(); event.stopPropagation(); recordInteraction();
-          nodeResize.scaling = edge.length === 2 && event.shiftKey;
-          resizeNodeLive(nodeResize, (event.clientX - nodeResize.x) / nodeResize.zoom, (event.clientY - nodeResize.y) / nodeResize.zoom);
+          state.latest = event;
+          state.frame ??= requestAnimationFrame(() => paintNodeResize(state));
         });
         handle.addEventListener('pointerup', finishNodeResize);
         handle.addEventListener('pointercancel', finishNodeResize);
@@ -2854,44 +2873,55 @@
             const size = sketchSize(current);
             size.scale = boundedNodeWidth(current, size.width * size.scale + change) / size.width; nodeSizes[record.id] = size;
           } else {
-            const width = Object.prototype.hasOwnProperty.call(nodeSizes, record.id) ? nodeSizes[record.id] : defaultNodeWidth(current);
-            nodeSizes[record.id] = boundedNodeWidth(current, width + change);
+            const size = nodeSizes[record.id];
+            nodeSizes[record.id] = size && typeof size === 'object'
+              ? { ...size, width: Math.max(minimumNodeWidth(current), size.width + change) }
+              : boundedNodeWidth(current, (size ?? defaultNodeWidth(current)) + change);
           }
           applyNodeSize(current); saveNodeSizes(); measureAndLayout();
         });
       }
     }
     let layoutNodes = [];
-    function layoutBoard(offsets) {
+    let layoutOrigin = { x: 0, y: 0 };
+    function layoutBoard(offsets, anchor) {
       const sketch = workingSketch && {
         id: workingSketch.nodeId, askingIds: currentSession.questionsByStatus.asking.map(q => q.id),
         position: workingSketchDrag?.id === workingSketch.nodeId &&
           (workingRound === null || workingSketchDrag.round === workingRound) ? workingSketchDrag.position : null
       };
-      return GrillLayout.layout({ nodes: layoutNodes, flow, constants: LAYOUT, manualOffsets: offsets, workingSketch: sketch });
+      return GrillLayout.layout({ nodes: layoutNodes, flow, constants: LAYOUT, manualOffsets: offsets,
+        workingSketch: sketch, origin: layoutOrigin, anchor });
     }
-    function measureAndLayout() {
-      if (!currentSession) return;
+    function measureAndLayout(anchor) {
+      if (!currentSession || (nodeResize && !anchor)) return;
       finishMotion();
-      const sizes = [];
+      const sizes = [], gripLimits = [];
       for (const record of nodeRecords.values()) if (record.kind === 'report' && nodeRecords.has(record.parsedTarget.questionId)) applyNodeSize(record);
       for (const record of nodeRecords.values()) {
         record.width = record.element.offsetWidth; record.height = record.element.offsetHeight;
         sizes.push({ id: record.id, width: record.width, height: record.height, kind: record.kind,
           validDependencies: record.validDependencies || [], anchorId: record.anchorId || '', parsedTarget: record.parsedTarget || { questionId: '', optionId: '' }, noteId: record.noteId || '' });
+        const { width, height } = record.element.getBoundingClientRect();
+        gripLimits.push([record.element.style, Math.min(width, height) / (4 * view.z) + 'px']);
+      }
+      for (const [style, limit] of gripLimits) {
+        if (style.getPropertyValue('--resize-limit') !== limit) style.setProperty('--resize-limit', limit);
       }
       layoutNodes = sizes;
-      graph = layoutBoard();
-      for (const [id, point] of pendingDropPositions) {
-        const base = graph.basePositions[id];
-        if (base) { manualOffsets[id] = { dx: point.x - base.x, dy: point.y - base.y }; pendingDropPositions.delete(id); saveOffsets(); }
+      if (pendingDropPositions.size) {
+        const { basePositions } = layoutBoard();
+        for (const [id, point] of pendingDropPositions) {
+          const base = basePositions[id];
+          if (base) { manualOffsets[id] = { dx: point.x - base.x, dy: point.y - base.y }; pendingDropPositions.delete(id); saveOffsets(); }
+        }
       }
-      applyOffsets();
+      applyOffsets(anchor);
       for (const cluster of graph.clusters) nodeRecords.get(cluster.id).element.setAttribute('aria-level', String(cluster.depth + 1));
       world.querySelectorAll('.board-caption').forEach(node => node.remove());
       if (graph.boardRefs.length) {
         const caption = element('h2', 'caption board-caption', currentLabels.references);
-        caption.style.left = graph.boardRefX + 'px'; caption.style.top = '-28px'; world.append(caption);
+        caption.style.left = graph.boardRefX + 'px'; caption.style.top = (layoutOrigin.y - 28) + 'px'; world.append(caption);
       }
       if (graph.boardResearch.length) {
         const caption = element('h2', 'caption board-caption', currentLabels.research);
@@ -2913,10 +2943,11 @@
       }
       labels.forEach((label, index) => { label.style.fontSize = ''; label.style.setProperty('--far-max', low[index] + 'px'); });
     }
-    function applyOffsets() {
+    function applyOffsets(anchor) {
       finishMotion();
-      if (!graph) return;
-      graph = layoutBoard(manualOffsets);
+      if (!layoutNodes.length) return;
+      graph = layoutBoard(manualOffsets, anchor);
+      layoutOrigin = graph.origin;
       for (const record of nodeRecords.values()) {
         const point = graph.positions[record.id];
         if (point) { record.x = point.x; record.y = point.y; placeNode(record); }
@@ -3235,6 +3266,7 @@
       flow = flow === 'td' ? 'lr' : 'td';
       try { localStorage.setItem(flowKey, flow); } catch (_) { /* The setting is optional when storage is unavailable. */ }
       document.documentElement.dataset.flow = flow;
+      layoutOrigin = { x: 0, y: 0 };
       manualOffsets = readOffsets(); workingSketchDrag = readWorkingSketchDrag(); measureAndLayout(); updateFlowButton();
       const sketch = nodeRecords.get(workingSketch?.nodeId);
       if (sketch && sketchOnPhone()) {
@@ -3263,7 +3295,7 @@
         button('⊡', currentLabels.fit, fitToScreen),
         button('◎', currentLabels.focusRound, () => { recordInteraction(); focusView(false); }),
         button('', '', toggleFlow, 'flow-toggle'),
-        button('↺', currentLabels.resetLayout, () => { manualOffsets = Object.create(null); nodeSizes = Object.create(null); workingSketchDrag = null; saveOffsets(); saveNodeSizes();
+        button('↺', currentLabels.resetLayout, () => { layoutOrigin = { x: 0, y: 0 }; manualOffsets = Object.create(null); nodeSizes = Object.create(null); workingSketchDrag = null; saveOffsets(); saveNodeSizes();
           for (const record of nodeRecords.values()) applyNodeSize(record);
           measureAndLayout(); fitToScreen(); })
       );
@@ -3428,7 +3460,7 @@
         if (record.id === workingSketch?.nodeId) {
           gesture.sketchStart ||= { x: record.x, y: record.y };
           workingSketchDrag = { id: record.id, round: workingRound,
-            position: { x: gesture.sketchStart.x + dx / view.z, y: gesture.sketchStart.y + dy / view.z } };
+            position: { x: gesture.sketchStart.x + dx / view.z - layoutOrigin.x, y: gesture.sketchStart.y + dy / view.z - layoutOrigin.y } };
         } else {
           manualOffsets[record.id] = { dx: gesture.offsetX + dx / view.z, dy: gesture.offsetY + dy / view.z };
         }

@@ -39,7 +39,7 @@ function generateBoard(seed, count, depth, askingMode) {
     const parent = index < depth ? questionIds[index - 1] : pick([undefined, ...eligible]);
     depths.push(parent ? 1 + depths[questionIds.indexOf(parent)] : 1);
     const state = askingIds.includes(id) ? 'asking' : pick(['settled', 'waiting', 'researching']);
-    // Approximate the measured card sizes, including picture options and user-resized cards.
+    // Approximate the measured card sizes, including picture options.
     const width = pick([240, 300, 300, 460, 600]);
     const height = {
       asking: () => integer(164, width === 460 ? 559 : 400),
@@ -77,7 +77,14 @@ function generateBoard(seed, count, depth, askingMode) {
       nodes.push(sketch(id, width, height));
     }
   }
-  return { nodes, constants, workingSketch: sketchCount ? { id: workingId, askingIds } : undefined };
+  // The viewer passes the effective measured size for a manual rectangle too.
+  for (const node of nodes) {
+    if (node.kind === 'sketch' || integer(0, 3) !== 0) continue;
+    node.width = integer(200, 1080);
+    node.height = integer(220, 950);
+  }
+  const position = sketchCount && integer(0, 2) === 0 ? { x: integer(-400, 600), y: integer(-200, 500) } : undefined;
+  return { nodes, constants, workingSketch: sketchCount ? { id: workingId, askingIds, position } : undefined };
 }
 
 function placedRectangles(input, label) {
@@ -106,6 +113,20 @@ function* allPairs(rectangles) {
     for (let next = index + 1; next < rectangles.length; next++) yield [a, rectangles[next]];
   }
 }
+
+test('a dragged working sketch clears a card at drop and after the card widens', () => {
+  const nodes = [idea(143), question('q1', 300, 164), sketch(workingId, 402, 846)];
+  const place = (x, askingIds = ['q1']) => placedRectangles({ nodes, flow: 'td', constants,
+    workingSketch: { id: workingId, askingIds, position: { x, y: 207 } } }, 'dragged sketch');
+  const dropped = place(50);
+  assert.deepEqual(dropped.at(-1), { id: workingId, x: 198, y: 207, width: 402, height: 846 });
+  assertClear(allPairs(dropped), 'drop');
+  assert.equal(place(210).at(-1).x, 210);
+  nodes[1].width = 500;
+  const resized = place(210, []);
+  assert.deepEqual(resized.at(-1), { id: workingId, x: 298, y: 207, width: 402, height: 846 });
+  assertClear(allPairs(resized), 'resize');
+});
 
 for (const [index, firstSeed] of seeds.entries()) {
   for (let count = 1; count <= 40; count++) {
