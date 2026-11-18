@@ -155,6 +155,7 @@
     button:focus-visible, a:focus-visible, .node:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
     #canvas { position: fixed; inset: 0; touch-action: none; user-select: none; overflow: clip; cursor: grab; }
     #canvas.dragging { cursor: grabbing; }
+    #canvas.middle-panning, #canvas.middle-panning * { cursor: grabbing; }
     #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
     #grid { position: absolute; inset: 0; pointer-events: none; background-image: radial-gradient(circle, var(--border) var(--dot-radius, 1px), transparent var(--dot-radius, 1px)); opacity: .25; }
     .connectors { width: 1px; height: 1px; overflow: visible; }
@@ -3309,6 +3310,21 @@
     let gesture = null;
     let pinch = null;
     let suppressClickUntil = 0;
+    let middlePan = null;
+    let suppressAuxClick = false;
+    function finishMiddlePan() {
+      if (!middlePan) return;
+      const { target, pointerId } = middlePan;
+      middlePan = null;
+      if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId);
+      canvas.classList.remove('middle-panning');
+      recordInteraction();
+      renderLatest();
+    }
+    window.addEventListener('blur', finishMiddlePan);
+    document.addEventListener('lostpointercapture', event => {
+      if (middlePan?.pointerId === event.pointerId) finishMiddlePan();
+    });
     function touchPair() { return [...pointers.values()].filter(pointer => pointer.type === 'touch').slice(0, 2); }
     function beginPinch() {
       const pair = touchPair(); if (pair.length !== 2) return;
@@ -3325,7 +3341,23 @@
       delete manualOffsets[ended.record.id]; saveOffsets(); applyOffsets(); scheduleLines();
     }
     function refByNodeId(id) { return currentUserRefs.find(ref => ref.nodeId === id); }
-    canvas.addEventListener('pointerdown', () => { suppressClickUntil = 0; }, true);
+    canvas.addEventListener('pointerdown', event => {
+      suppressClickUntil = 0;
+      if (event.button !== 1) return;
+      event.preventDefault(); event.stopPropagation();
+      cancelGlide(); recordInteraction();
+      // Capturing on the link preserves its stationary middle-click activation.
+      const target = event.target.closest('a') || canvas;
+      target.setPointerCapture(event.pointerId);
+      middlePan = { target, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
+        x: view.x, y: view.y, dragged: false };
+      suppressAuxClick = false;
+      canvas.classList.add('middle-panning');
+    }, true);
+    canvas.addEventListener('mousedown', event => {
+      // Prevent native autoscroll and middle-button paste.
+      if (event.button === 1) event.preventDefault();
+    }, true);
     canvas.addEventListener('pointerdown', event => {
       if (nodeResize) { event.preventDefault(); return; }
       if (event.button !== 0) return;
@@ -3353,6 +3385,15 @@
       if (record) record.element.focus({ preventScroll: true });
     });
     canvas.addEventListener('pointermove', event => {
+      if (middlePan?.pointerId === event.pointerId) {
+        if (!(event.buttons & 4)) { finishMiddlePan(); return; }
+        const dx = event.clientX - middlePan.startX, dy = event.clientY - middlePan.startY;
+        const distance = Math.hypot(dx, dy);
+        if (distance > 4) suppressAuxClick = true;
+        if (!middlePan.dragged && distance < 4) return;
+        middlePan.dragged = true;
+        view.x = middlePan.x + dx; view.y = middlePan.y + dy; applyView(); return;
+      }
       if (connection && connection.pointerId === event.pointerId) {
         connection.point = worldPoint(event.clientX, event.clientY);
         if (Math.hypot(event.clientX - connection.startX, event.clientY - connection.startY) > 6) connection.moved = true;
@@ -3396,6 +3437,7 @@
       } else { view.x = gesture.x + dx; view.y = gesture.y + dy; applyView(); }
     });
     async function endPointer(event, canceled) {
+      if (middlePan?.pointerId === event.pointerId) { finishMiddlePan(); return; }
       if (connection && connection.pointerId === event.pointerId) {
         const ended = connection; connection = null;
         const target = canceled ? '' : connectionTargetAt(event.clientX, event.clientY);
@@ -3455,6 +3497,11 @@
     }
     canvas.addEventListener('pointerup', event => endPointer(event, false));
     canvas.addEventListener('pointercancel', event => endPointer(event, true));
+    canvas.addEventListener('auxclick', event => {
+      if (event.button !== 1 || !suppressAuxClick) return;
+      suppressAuxClick = false;
+      event.preventDefault(); event.stopImmediatePropagation();
+    }, true);
     canvas.addEventListener('click', event => {
       if (event.detail > 0 && Date.now() < suppressClickUntil) { event.preventDefault(); event.stopImmediatePropagation(); }
     }, true);
@@ -3650,7 +3697,7 @@
       });
     }
     function renderLatest() {
-      if (!latestSession || gesture || pinch || connection || nodeResize) return;
+      if (!latestSession || gesture || middlePan || pinch || connection || nodeResize) return;
       const json = JSON.stringify([latestSession, latestUser, canWrite, sessionChanged]);
       if (json === lastRenderedJson) return;
       render(latestSession, latestUser); lastRenderedJson = json; renderedCanWrite = canWrite;

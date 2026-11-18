@@ -5,6 +5,7 @@ What changed for people who use GrillBoard, newest first.
 ## Unreleased
 
 - Added an interactive browser demo that replays a recorded session from the first round through the spec.
+- Drag with the middle mouse button anywhere on the board to pan the view.
 
 ## 0.3.0 - 2026-11-18
 
