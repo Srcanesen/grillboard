@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import test from 'node:test';
 
 const skill = fileURLToPath(new URL('../../skills/grillboard/', import.meta.url));
@@ -16,6 +17,8 @@ const chromeExecutable = process.env.CHROME_BIN
 export const browserTest = (name, check) => test(name, {
   skip: !chromeExecutable && 'Chrome not found; set CHROME_BIN to an installed Chrome/Chromium executable.'
 }, check);
+const chromeProcesses = new WeakSet();
+const runFile = promisify(execFile);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 export async function until(check, message) {
   const deadline = Date.now() + 6000;
@@ -26,11 +29,32 @@ export async function until(check, message) {
   throw new Error('Timed out: ' + message);
 }
 export async function stop(child) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  const done = once(child, 'exit');
-  child.kill('SIGTERM');
-  const timer = setTimeout(() => child.kill('SIGKILL'), 2000);
-  try { await done; } finally { clearTimeout(timer); }
+  if (child.exitCode === null && child.signalCode === null) {
+    const done = once(child, 'exit');
+    child.kill('SIGTERM');
+    const timer = setTimeout(() => child.kill('SIGKILL'), 2000);
+    try { await done; } finally { clearTimeout(timer); }
+  }
+  if (chromeProcesses.has(child)) {
+    // Chrome helpers can still write to the profile after the browser process exits.
+    const group = String(child.pid);
+    const forceAt = Date.now() + 2000;
+    let forced = false;
+    await until(async () => {
+      const { stdout } = await runFile('ps', ['-axo', 'pgid=,stat=']);
+      const running = stdout.trim().split('\n').some(line => {
+        const [pgid, state] = line.trim().split(/\s+/);
+        return pgid === group && !state.startsWith('Z');
+      });
+      if (running && !forced && Date.now() >= forceAt) {
+        // A relaunched browser can also outlive the process we spawned.
+        forced = true;
+        try { process.kill(-child.pid, 'SIGKILL'); }
+        catch (error) { if (error.code !== 'ESRCH') throw error; }
+      }
+      return !running;
+    }, `Chrome process group ${group} to exit`);
+  }
 }
 export async function serve(dir, children) {
   const child = spawn('python3', [path.join(skill, 'server.py'), dir, '--serve', '--port', '0']);
@@ -71,7 +95,8 @@ async function launchBrowser(profile, children) {
   const child = spawn(chromeExecutable, ['--headless=new', '--remote-debugging-pipe', '--no-first-run',
     '--no-default-browser-check', '--disable-background-networking', '--disable-component-update',
     '--disable-sync', '--disable-extensions', '--user-data-dir=' + profile, 'about:blank'],
-  { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
+  { detached: true, stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
+  chromeProcesses.add(child);
   children.push(child);
   let next = 0, buffer = '', errors = '', mainFrameId, commandTimeout = 30000;
   child.stderr.on('data', bytes => errors += bytes);
@@ -192,6 +217,6 @@ export async function withBoard(initial, check) {
     await check({ root, url, page, session });
   } finally {
     for (const child of children.reverse()) await stop(child);
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   }
 }
