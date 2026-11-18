@@ -2,11 +2,21 @@
 
 What changed for people who use GrillBoard, newest first.
 
-## Unreleased
+## 0.4.0 - 2026-11-18
 
-- Added an interactive browser demo that replays a recorded session from the first round through the spec.
-- Drag with the middle mouse button anywhere on the board to pan the view.
-- Resize cards from any edge or corner, and double-click a handle to restore automatic sizing.
+Try the board in your browser before installing, and move things around more freely.
+
+### Added
+
+- **A demo in the browser.** [Try it](https://srcanesen.github.io/grillboard/demo/): a recorded session replays from the first round through the spec. You answer the rounds, and your choice of home screen layout decides the sketch.
+- **Pan with the middle mouse button.** Press the wheel and drag anywhere on the board, over cards and sketches too.
+- **Resize cards in every direction.** Question cards, the idea, references, reports and research notes resize in width and height from any edge or corner. Double-click a handle to return to automatic size.
+
+### Changed
+
+- Resizing a card no longer moves the other cards. An enlarged card is drawn above its neighbours.
+- A sketch you drag onto another card settles beside it instead of covering it.
+- Resize handles are off in the far view, where cards show only their titles.
 
 ## 0.3.0 - 2026-11-18
 
