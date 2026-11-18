@@ -77,11 +77,10 @@ function generateBoard(seed, count, depth, askingMode) {
       nodes.push(sketch(id, width, height));
     }
   }
-  // The viewer passes the effective measured size for a manual rectangle too.
+  // Manual rectangles change what is drawn while reserving the original space.
   for (const node of nodes) {
     if (node.kind === 'sketch' || integer(0, 3) !== 0) continue;
-    node.width = integer(200, 1080);
-    node.height = integer(220, 950);
+    node.manualRect = { width: integer(200, 1080), height: integer(220, 950), dx: integer(-200, 0), dy: integer(-200, 0) };
   }
   const position = sketchCount && integer(0, 2) === 0 ? { x: integer(-400, 600), y: integer(-200, 500) } : undefined;
   return { nodes, constants, workingSketch: sketchCount ? { id: workingId, askingIds, position } : undefined };
@@ -89,10 +88,10 @@ function generateBoard(seed, count, depth, askingMode) {
 
 function placedRectangles(input, label) {
   const { positions } = layout(input);
-  return input.nodes.map(({ id, width, height }) => {
+  return input.nodes.map(({ id, width, height, manualRect }) => {
     const point = positions[id];
     assert.ok(point && Number.isFinite(point.x) && Number.isFinite(point.y), `${label}: missing position for ${id}`);
-    return { id, x: point.x, y: point.y, width, height };
+    return { id, x: point.x, y: point.y, width: manualRect?.width ?? width, height: manualRect?.height ?? height };
   });
 }
 
@@ -122,9 +121,9 @@ test('a dragged working sketch clears a card at drop and after the card widens',
   assert.deepEqual(dropped.at(-1), { id: workingId, x: 198, y: 207, width: 402, height: 846 });
   assertClear(allPairs(dropped), 'drop');
   assert.equal(place(210).at(-1).x, 210);
-  nodes[1].width = 500;
+  nodes[1].manualRect = { width: 500, height: 164, dx: -40 };
   const resized = place(210, []);
-  assert.deepEqual(resized.at(-1), { id: workingId, x: 298, y: 207, width: 402, height: 846 });
+  assert.deepEqual(resized.at(-1), { id: workingId, x: 358, y: 207, width: 402, height: 846 });
   assertClear(allPairs(resized), 'resize');
 });
 
@@ -136,7 +135,11 @@ for (const [index, firstSeed] of seeds.entries()) {
       const label = `seed 0x${seed.toString(16)}, flow ${flow}`;
       test(`placed rectangles are clear (${label})`, () => {
         const board = generateBoard(seed, count, depth, (index + count) % 3);
-        assertClear(allPairs(placedRectangles({ ...board, flow }, label)), label);
+        const rectangles = placedRectangles({ ...board, flow }, label);
+        const working = rectangles.find(rect => rect.id === board.workingSketch?.id);
+        const automatic = rectangles.filter((rect, i) => !board.nodes[i].manualRect && rect !== working);
+        assertClear(allPairs(automatic), label);
+        if (working) assertClear(rectangles.filter(rect => rect !== working).map(rect => [working, rect]), label);
       });
     }
   }

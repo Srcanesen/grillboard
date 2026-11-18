@@ -160,6 +160,8 @@
     #grid { position: absolute; inset: 0; pointer-events: none; background-image: radial-gradient(circle, var(--border) var(--dot-radius, 1px), transparent var(--dot-radius, 1px)); opacity: .25; }
     .connectors { width: 1px; height: 1px; overflow: visible; }
     .node { position: absolute; margin: 0; cursor: grab; }
+    .node.resize-raised { z-index: 3; }
+    .node.resize-raised.resizing { z-index: 4; }
     .question-card { width: 300px; max-width: none; }
     .question-card.picture-options { width: 460px; }
     .question-card.manually-sized { display: flex; flex-direction: column; }
@@ -712,8 +714,8 @@
   </script>
   <!-- The layout block knows node kinds and sizes, not the page: sizes in, positions out. -->
   <script id="grill-layout">
-    // layout({ nodes, flow, constants, manualOffsets?, workingSketch?, origin?, anchor? }) -> read-only board placement.
-    // The origin translates the whole placement. An anchor { id, x, y } sets the origin so the named node lands there.
+    // layout({ nodes, flow, constants, manualOffsets?, workingSketch? }) -> read-only board placement.
+    // Node dimensions reserve automatic space. An optional manualRect { width, height, dx?, dy? } changes only that node's drawn rectangle.
     // workingSketch: { id, askingIds, position? }; position is a drag override in board coordinates.
     // cluster({ node, refs, reports, flow, manualOffsets? }) -> { width, height, positions, outputId } for one card and its attachments; node may carry x/y, reports may carry live x/y.
     // cluster positions include direct attachment offsets; outputId is the lowest card/report without a direct report offset.
@@ -761,7 +763,7 @@
         }
         return freeze({ width, height, positions, outputId });
       }
-      function layout({ nodes: inputNodes, flow, constants: LAYOUT, manualOffsets = {}, workingSketch, origin = { x: 0, y: 0 }, anchor }) {
+      function layout({ nodes: inputNodes, flow, constants: LAYOUT, manualOffsets = {}, workingSketch }) {
         const nodes = copy(inputNodes);
         const positions = Object.create(null), parents = Object.create(null), secondary = Object.create(null);
         const idea = nodes.find(node => node.kind === 'idea') || { id: '@idea', width: LAYOUT.ideaWidth, height: 80 };
@@ -856,19 +858,23 @@
         const draggedPosition = working && workingSketch.position;
         const placeWorking = roundNodes.length || draggedPosition;
         const parkedSketches = placeWorking ? sketches.filter(sketch => sketch !== working) : sketches;
-        function placeWorkingSketch(obstacles = []) {
-          const gap = LAYOUT.sketchRoundGap;
-          const point = draggedPosition ? copy(draggedPosition) : flow === 'lr'
+        const gap = placeWorking ? LAYOUT.sketchRoundGap : 0;
+        function workingCandidate() {
+          return draggedPosition ? copy(draggedPosition) : flow === 'lr'
             ? { x: Math.min(...roundNodes.map(node => positions[node.id].x)), y: Math.max(...roundNodes.map(node => positions[node.id].y + node.height)) + gap }
             : { x: Math.max(...roundNodes.map(node => positions[node.id].x + node.width)) + gap, y: Math.min(...roundNodes.map(node => positions[node.id].y)) };
+        }
+        function clearWorkingSketch(point, obstacles, useManual = false) {
+          const bounds = (useManual && working.manualRect) || working;
           const axis = flow === 'lr' ? 'y' : 'x';
           while (true) {
             let next = point[axis];
             for (const node of obstacles) {
-              const { x, y } = positions[node.id];
-              const right = x + node.width + gap, bottom = y + node.height + gap;
-              if (point.x < right && x < point.x + working.width + gap &&
-                  point.y < bottom && y < point.y + working.height + gap) {
+              const rect = (useManual && node.manualRect) || node;
+              const x = positions[node.id].x + (rect.dx || 0), y = positions[node.id].y + (rect.dy || 0);
+              const right = x + rect.width + gap, bottom = y + rect.height + gap;
+              if (point.x < right && x < point.x + bounds.width + gap &&
+                  point.y < bottom && y < point.y + bounds.height + gap) {
                 next = Math.max(next, axis === 'x' ? right : bottom);
               }
             }
@@ -893,7 +899,7 @@
           }
         }
         for (const sketch of sketches) parents[sketch.id] = idea.id;
-        if (placeWorking) positions[working.id] = placeWorkingSketch();
+        if (placeWorking) positions[working.id] = workingCandidate();
         const boardRefs = refs.filter(ref => !positions[ref.id]);
         const boardResearch = nodes.filter(node => node.kind === 'research' && !byId.has(node.parsedTarget?.questionId));
         const boardReports = reports.filter(report => !positions[report.id]);
@@ -914,8 +920,8 @@
           }
         }
         for (const report of boardReports) if (!placedReports.has(report.id)) placeBoardItem(report);
-        const obstacles = placeWorking ? [idea, ...questions, ...refs, ...reports, ...boardResearch, ...parkedSketches] : [];
-        if (placeWorking) positions[working.id] = placeWorkingSketch(obstacles);
+        const obstacles = working ? [idea, ...questions, ...refs, ...reports, ...boardResearch, ...sketches.filter(node => node !== working)] : [];
+        if (placeWorking) positions[working.id] = clearWorkingSketch(workingCandidate(), obstacles);
         const basePositions = copy(positions);
         for (const [nodeId, point] of Object.entries(positions)) {
           let dx = 0, dy = 0, id = nodeId;
@@ -926,17 +932,19 @@
           }
           point.x += dx; point.y += dy;
         }
-        if (placeWorking) positions[working.id] = placeWorkingSketch(obstacles);
-        const placed = anchor && positions[anchor.id];
-        const translation = placed ? { x: anchor.x - placed.x, y: anchor.y - placed.y } : { ...origin };
-        if (translation.x || translation.y) {
-          for (const point of [...Object.values(positions), ...Object.values(basePositions), ...clusters]) {
-            point.x += translation.x; point.y += translation.y;
-          }
+        if (working) {
+          const point = placeWorking ? workingCandidate() : copy(positions[working.id]);
+          const { dx = 0, dy = 0 } = working.manualRect || {};
+          point.x += dx; point.y += dy;
+          positions[working.id] = clearWorkingSketch(point, obstacles, true);
+        }
+        for (const node of nodes) {
+          if (node === working || !node.manualRect || !positions[node.id]) continue;
+          positions[node.id].x += node.manualRect.dx || 0;
+          positions[node.id].y += node.manualRect.dy || 0;
         }
         return freeze({ flow, positions, basePositions, parents, secondary, clusters, levels, edges, boardRefs, boardResearch,
-          boardRefX: boardRefX + translation.x, researchCaptionY: researchCaptionY + translation.y, boardReports,
-          sketches: sketches.map(node => node.id), origin: translation });
+          boardRefX, researchCaptionY, boardReports, sketches: sketches.map(node => node.id) });
       }
 
       function motion(previous, current) {
@@ -2691,8 +2699,11 @@
         for (const [id, size] of Object.entries(saved)) {
           if (typeof size === 'number' && Number.isFinite(size)) sizes[id] = size;
           else if (Number.isFinite(size?.width) && size.width > 0 && Number.isFinite(size.height) && size.height > 0) {
-            if (GrillSession.parseNodeId(id).kind !== 'sketch') sizes[id] = { width: size.width, height: size.height };
-            else if (Number.isFinite(size.scale) && size.scale > 0) sizes[id] = { width: size.width, height: size.height, scale: size.scale };
+            const rect = { width: size.width, height: size.height };
+            if (Number.isFinite(size.dx) && size.dx) rect.dx = size.dx;
+            if (Number.isFinite(size.dy) && size.dy) rect.dy = size.dy;
+            if (GrillSession.parseNodeId(id).kind !== 'sketch') sizes[id] = rect;
+            else if (Number.isFinite(size.scale) && size.scale > 0) sizes[id] = { ...rect, scale: size.scale };
           }
         }
       } catch (_) {}
@@ -2707,8 +2718,11 @@
       if (record.kind === 'sketch') return record.sketch.height > record.sketch.width ? LAYOUT.sketchWidth.portrait : LAYOUT.sketchWidth.landscape;
       if (record.kind === 'idea') return LAYOUT.ideaWidth;
       if (record.kind === 'reference') return 200;
-      if (record.kind === 'report' && nodeRecords.has(record.parsedTarget.questionId)) return nodeRecords.get(record.parsedTarget.questionId).element.offsetWidth;
-      if (record.kind === 'research' || record.kind === 'report') return 240;
+      if (record.kind === 'report') {
+        const question = nodeRecords.get(record.parsedTarget.questionId);
+        return question?.kind === 'question' ? defaultNodeWidth(question) : 240;
+      }
+      if (record.kind === 'research') return 240;
       return record.element.classList.contains('picture-options') ? 460 : LAYOUT.questionWidth;
     }
     function minimumNodeWidth(record) {
@@ -2720,8 +2734,8 @@
       return Math.max(minimumNodeWidth(record), Math.min(max, width));
     }
     // Legacy sketch widths mean a scale at the session's original viewport.
-    function sketchSize(record) {
-      const sketch = record.sketch, saved = nodeSizes[record.id];
+    function sketchSize(record, saved = nodeSizes[record.id]) {
+      const sketch = record.sketch;
       const defaultScale = Math.min(1, defaultNodeWidth(record) / sketch.width);
       const size = saved && typeof saved === 'object' ? { ...saved } : {
         width: sketch.width, height: sketch.height, scale: typeof saved === 'number' ? saved / sketch.width : defaultScale
@@ -2733,10 +2747,10 @@
       size.scale = boundedNodeWidth(record, size.width * size.scale) / size.width;
       return size;
     }
-    function applyNodeSize(record) {
-      const saved = Object.prototype.hasOwnProperty.call(nodeSizes, record.id);
+    function applyNodeSize(record, stored = nodeSizes[record.id]) {
+      const saved = stored != null;
       if (record.kind === 'sketch') {
-        const entry = sketchNodes.get(record.sketch.id), size = sketchSize(record);
+        const entry = sketchNodes.get(record.sketch.id), size = sketchSize(record, stored);
         const state = record.id === workingSketch?.nodeId ? sketchState[record.sketch.id] : null;
         record.minimized = Boolean(state?.minimized);
         record.element.classList.toggle('minimized', record.minimized);
@@ -2758,7 +2772,7 @@
         entry.viewport.textContent = interpolate(currentLabels.viewportSize, { width: Math.round(size.width), height: Math.round(size.height) });
         entry.viewport.hidden = !(nodeResize && nodeResize.record.id === record.id) && size.width === record.sketch.width && size.height === record.sketch.height;
       } else {
-        const size = nodeSizes[record.id], manual = saved && typeof size === 'object';
+        const size = stored, manual = saved && typeof size === 'object';
         const width = manual ? Math.max(minimumNodeWidth(record), size.width)
           : saved ? boundedNodeWidth(record, size) : defaultNodeWidth(record);
         if (saved && !manual) nodeSizes[record.id] = width;
@@ -2806,8 +2820,14 @@
         };
       }
       applyNodeSize(record);
-      measureAndLayout({ id: record.id, x: west ? state.right - record.element.offsetWidth : state.left,
-        y: north ? state.bottom - record.element.offsetHeight : state.top });
+      const limit = measureDrawnNode(record);
+      const size = nodeSizes[record.id];
+      const offsetX = state.dx + (west ? state.width - record.width : 0);
+      const offsetY = state.dy + (north ? state.height - record.height : 0);
+      if (offsetX) size.dx = offsetX; else delete size.dx;
+      if (offsetY) size.dy = offsetY; else delete size.dy;
+      setDrawnGeometry(record, limit);
+      applyOffsets(); drawLines();
     }
     function paintNodeResize(state) {
       state.frame = null;
@@ -2824,6 +2844,7 @@
       nodeResize = null;
       if (ended.handle.hasPointerCapture(event.pointerId)) ended.handle.releasePointerCapture(event.pointerId);
       const { record, changed } = ended;
+      record.element.classList.remove('resizing');
       if (changed && record.kind !== 'sketch') nodeSizes[record.id].height = record.height;
       applyNodeSize(record); saveNodeSizes();
       measureAndLayout(); renderLatest();
@@ -2843,9 +2864,11 @@
           if (event.button !== 0 || nodeResize || gesture || pinch || connection) return;
           event.preventDefault(); event.stopPropagation(); cancelGlide(); recordInteraction();
           const current = nodeRecords.get(record.id); if (!current) return;
+          const stored = nodeSizes[record.id];
           nodeResize = { pointerId: event.pointerId, handle, record: current, edge, x: event.clientX, y: event.clientY,
             width: current.width, height: current.height, size: current.kind === 'sketch' ? sketchSize(current) : null,
-            left: current.x, top: current.y, right: current.x + current.width, bottom: current.y + current.height, zoom: view.z, frame: null };
+            dx: stored?.dx || 0, dy: stored?.dy || 0, zoom: view.z, frame: null };
+          current.element.classList.add('resizing');
           handle.setPointerCapture(event.pointerId);
           if (edge === primary) handle.focus({ preventScroll: true });
           applyNodeSize(current);
@@ -2882,45 +2905,56 @@
       }
     }
     let layoutNodes = [];
-    let layoutOrigin = { x: 0, y: 0 };
-    function layoutBoard(offsets, anchor) {
+    function layoutBoard(offsets) {
       const sketch = workingSketch && {
         id: workingSketch.nodeId, askingIds: currentSession.questionsByStatus.asking.map(q => q.id),
         position: workingSketchDrag?.id === workingSketch.nodeId &&
           (workingRound === null || workingSketchDrag.round === workingRound) ? workingSketchDrag.position : null
       };
-      return GrillLayout.layout({ nodes: layoutNodes, flow, constants: LAYOUT, manualOffsets: offsets,
-        workingSketch: sketch, origin: layoutOrigin, anchor });
+      return GrillLayout.layout({ nodes: layoutNodes, flow, constants: LAYOUT, manualOffsets: offsets, workingSketch: sketch });
     }
-    function measureAndLayout(anchor) {
-      if (!currentSession || (nodeResize && !anchor)) return;
+    function measureDrawnNode(record) {
+      record.width = record.element.offsetWidth; record.height = record.element.offsetHeight;
+      const { width, height } = record.element.getBoundingClientRect();
+      return Math.min(width, height) / (4 * view.z) + 'px';
+    }
+    function setDrawnGeometry(record, limit) {
+      const { element, layoutNode, width, height } = record;
+      const saved = nodeSizes[record.id];
+      layoutNode.manualRect = saved !== undefined && !record.minimized ? { width, height, dx: saved.dx, dy: saved.dy } : undefined;
+      element.classList.toggle('resize-raised', width > layoutNode.width || height > layoutNode.height);
+      if (element.style.getPropertyValue('--resize-limit') !== limit) element.style.setProperty('--resize-limit', limit);
+    }
+    function measureAndLayout() {
+      if (!currentSession || nodeResize) return;
       finishMotion();
-      const sizes = [], gripLimits = [];
-      for (const record of nodeRecords.values()) if (record.kind === 'report' && nodeRecords.has(record.parsedTarget.questionId)) applyNodeSize(record);
-      for (const record of nodeRecords.values()) {
-        record.width = record.element.offsetWidth; record.height = record.element.offsetHeight;
-        sizes.push({ id: record.id, width: record.width, height: record.height, kind: record.kind,
-          validDependencies: record.validDependencies || [], anchorId: record.anchorId || '', parsedTarget: record.parsedTarget || { questionId: '', optionId: '' }, noteId: record.noteId || '' });
-        const { width, height } = record.element.getBoundingClientRect();
-        gripLimits.push([record.element.style, Math.min(width, height) / (4 * view.z) + 'px']);
-      }
-      for (const [style, limit] of gripLimits) {
-        if (style.getPropertyValue('--resize-limit') !== limit) style.setProperty('--resize-limit', limit);
-      }
-      layoutNodes = sizes;
+      const records = [...nodeRecords.values()];
+      const resized = records.filter(record => nodeSizes[record.id] !== undefined);
+      // Measure the mounted content at automatic sizes before restoring its drawn rectangles.
+      for (const record of resized) applyNodeSize(record, null);
+      layoutNodes = records.map(record => {
+        record.layoutNode = { id: record.id, width: record.element.offsetWidth, height: record.element.offsetHeight, kind: record.kind,
+          validDependencies: record.validDependencies || [], anchorId: record.anchorId || '', parsedTarget: record.parsedTarget || { questionId: '', optionId: '' }, noteId: record.noteId || '' };
+        return record.layoutNode;
+      });
+      for (const record of resized) applyNodeSize(record);
+      const limits = records.map(measureDrawnNode);
+      records.forEach((record, index) => setDrawnGeometry(record, limits[index]));
       if (pendingDropPositions.size) {
         const { basePositions } = layoutBoard();
         for (const [id, point] of pendingDropPositions) {
           const base = basePositions[id];
-          if (base) { manualOffsets[id] = { dx: point.x - base.x, dy: point.y - base.y }; pendingDropPositions.delete(id); saveOffsets(); }
+          const size = nodeSizes[id];
+          if (base) { manualOffsets[id] = { dx: point.x - base.x - (size?.dx || 0), dy: point.y - base.y - (size?.dy || 0) };
+            pendingDropPositions.delete(id); saveOffsets(); }
         }
       }
-      applyOffsets(anchor);
+      applyOffsets();
       for (const cluster of graph.clusters) nodeRecords.get(cluster.id).element.setAttribute('aria-level', String(cluster.depth + 1));
       world.querySelectorAll('.board-caption').forEach(node => node.remove());
       if (graph.boardRefs.length) {
         const caption = element('h2', 'caption board-caption', currentLabels.references);
-        caption.style.left = graph.boardRefX + 'px'; caption.style.top = (layoutOrigin.y - 28) + 'px'; world.append(caption);
+        caption.style.left = graph.boardRefX + 'px'; caption.style.top = '-28px'; world.append(caption);
       }
       if (graph.boardResearch.length) {
         const caption = element('h2', 'caption board-caption', currentLabels.research);
@@ -2942,11 +2976,10 @@
       }
       labels.forEach((label, index) => { label.style.fontSize = ''; label.style.setProperty('--far-max', low[index] + 'px'); });
     }
-    function applyOffsets(anchor) {
+    function applyOffsets() {
       finishMotion();
       if (!layoutNodes.length) return;
-      graph = layoutBoard(manualOffsets, anchor);
-      layoutOrigin = graph.origin;
+      graph = layoutBoard(manualOffsets);
       for (const record of nodeRecords.values()) {
         const point = graph.positions[record.id];
         if (point) { record.x = point.x; record.y = point.y; placeNode(record); }
@@ -3169,6 +3202,7 @@
       const sketch = nodeRecords.get(workingSketch?.nodeId);
       if ((zoomChanged || resized) && sketch?.minimized) {
         sketch.width = sketch.element.offsetWidth; sketch.height = sketch.element.offsetHeight;
+        if (sketch.layoutNode) sketch.layoutNode.manualRect = { width: sketch.width, height: sketch.height };
         scheduleLines();
       }
     }
@@ -3265,7 +3299,6 @@
       flow = flow === 'td' ? 'lr' : 'td';
       try { localStorage.setItem(flowKey, flow); } catch (_) { /* The setting is optional when storage is unavailable. */ }
       document.documentElement.dataset.flow = flow;
-      layoutOrigin = { x: 0, y: 0 };
       manualOffsets = readOffsets(); workingSketchDrag = readWorkingSketchDrag(); measureAndLayout(); updateFlowButton();
       const sketch = nodeRecords.get(workingSketch?.nodeId);
       if (sketch && sketchOnPhone()) {
@@ -3294,7 +3327,7 @@
         button('⊡', currentLabels.fit, fitToScreen),
         button('◎', currentLabels.focusRound, () => { recordInteraction(); focusView(false); }),
         button('', '', toggleFlow, 'flow-toggle'),
-        button('↺', currentLabels.resetLayout, () => { layoutOrigin = { x: 0, y: 0 }; manualOffsets = Object.create(null); nodeSizes = Object.create(null); workingSketchDrag = null; saveOffsets(); saveNodeSizes();
+        button('↺', currentLabels.resetLayout, () => { manualOffsets = Object.create(null); nodeSizes = Object.create(null); workingSketchDrag = null; saveOffsets(); saveNodeSizes();
           for (const record of nodeRecords.values()) applyNodeSize(record);
           measureAndLayout(); fitToScreen(); })
       );
@@ -3458,8 +3491,9 @@
         const record = gesture.record;
         if (record.id === workingSketch?.nodeId) {
           gesture.sketchStart ||= { x: record.x, y: record.y };
+          const size = record.minimized ? null : nodeSizes[record.id];
           workingSketchDrag = { id: record.id, round: workingRound,
-            position: { x: gesture.sketchStart.x + dx / view.z - layoutOrigin.x, y: gesture.sketchStart.y + dy / view.z - layoutOrigin.y } };
+            position: { x: gesture.sketchStart.x + dx / view.z - (size?.dx || 0), y: gesture.sketchStart.y + dy / view.z - (size?.dy || 0) } };
         } else {
           manualOffsets[record.id] = { dx: gesture.offsetX + dx / view.z, dy: gesture.offsetY + dy / view.z };
         }

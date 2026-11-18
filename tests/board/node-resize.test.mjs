@@ -126,34 +126,47 @@ test('short report grips stay inside the card, respect the thickness limit and d
   });
 });
 
-test('resize frames move descendants and cables before release while the handle tracks the pointer', async () => {
-  await withBoard(data, async ({ page }) => {
+test('resizing changes no other node position during the drag, after release or after reload', async () => {
+  await withBoard(data, async ({ page, url }) => {
     await prepare(page);
     await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
-    await page.evaluate(`nodeSizes.q1 = { width: 300, height: 280 }; applyNodeSize(${node}); measureAndLayout();
-      window.childStart = nodeRecords.get('q2').y`);
+    const positions = () => page.evaluate(`[...nodeRecords.values()].filter(node => node.id !== 'q1').map(({ id, x, y }) => [id, x, y])`);
+    const expected = [
+      ['@idea', -190, 0], ['q2', -478, 500], ['q3', -150, 165], ['q4', 178, 165],
+      ['ref:agent:guide', -798, 0], ['ref:agent:photo', -798, 92], ['research:r2', -798, 322],
+      ['report:r1', -478, 380], ['sketch:home', 526, 165]
+    ];
+    assert.deepEqual(await positions(), expected);
     await centerCard(page);
     const start = await handlePoint(page, 's');
     await mouse(page, 'mousePressed', start);
-    for (const [dy, height] of [[180, 460], [320, 600]]) {
+    for (const [dy, height] of [[180, 387], [320, 527]]) {
       const end = { x: start.x, y: start.y + dy };
       await mouse(page, 'mouseMoved', end);
       await page.evaluate('new Promise(resolve => requestAnimationFrame(resolve))');
+      assert.deepEqual(await positions(), expected);
       assert.deepEqual(await page.evaluate(`(() => {
-        const child = nodeRecords.get('q2'), report = nodeRecords.get('report:r1');
-        const cable = world.querySelector('[data-from="report:r1"][data-to="q2"]');
+        const parent = ${node}, child = nodeRecords.get('q2');
+        const cable = world.querySelector('[data-from="q1"][data-to="q2"]');
+        const start = cable.getPointAtLength(0);
         const end = cable.getPointAtLength(cable.getTotalLength());
         const hit = document.elementFromPoint(${end.x}, ${end.y});
-        return [${node}.height, child.y - childStart, child.y - report.y - report.height,
-          end.y - child.y, hit === nodeResize.handle, motionFrame, glideFrame];
-      })()`), [height, dy, 64, 0, true, null, null]);
+        const overlap = document.elementFromPoint(child.x + view.x + 20, child.y + view.y + 10);
+        return [parent.height, start.y - parent.y - parent.height, end.y - child.y,
+          hit === nodeResize.handle, overlap.closest('.node').dataset.nodeId, motionFrame, glideFrame];
+      })()`), [height, 0, 0, true, 'q1', null, null]);
     }
     await mouse(page, 'mouseReleased', { x: start.x, y: start.y + 320 });
-    assert.equal(await page.evaluate("nodeRecords.get('q2').y - childStart"), 320);
+    assert.deepEqual(await positions(), expected);
+    const beforeReload = await page.evaluate('performance.timeOrigin');
+    await page.go(url);
+    await until(() => page.evaluate(`performance.timeOrigin !== ${beforeReload} && typeof currentSession !== 'undefined' && !!currentSession`), 'board reload');
+    assert.deepEqual(await positions(), expected);
+    assert.deepEqual(await page.evaluate(`[${node}.height, getComputedStyle(${node}.element).zIndex]`), [527, '3']);
   });
 });
 
-test('manual sizes reflow content, make room in the layout, survive reload and reset on double-click', async () => {
+test('manual sizes reflow content, survive reload and reset on double-click', async () => {
   await withBoard(data, async ({ page, url }) => {
     await prepare(page);
     await centerCard(page);
@@ -178,19 +191,16 @@ test('manual sizes reflow content, make room in the layout, survive reload and r
       })()`), [345, 0, null]);
     });
     assert.deepEqual((await page.evaluate(box)).slice(0, 4), [300, 250, 690, 520]);
-    assert.equal(await page.evaluate(`(() => {
-      const records = [...nodeRecords.values()];
-      return records.flatMap((a, i) => records.slice(i + 1).filter(b =>
-        a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height)).length;
-    })()`), 0);
+    await dragHandle(page, 'nw', -40, -30);
+    assert.deepEqual((await page.evaluate(box)).slice(0, 4), [260, 220, 730, 550]);
     const saved = await page.evaluate('JSON.parse(localStorage.getItem(sizesKey)).q1');
-    assert.deepEqual(saved, { width: 690, height: 520 });
+    assert.deepEqual(saved, { width: 730, height: 550, dx: -40, dy: -30 });
     const beforeReload = await page.evaluate('performance.timeOrigin');
     await page.go(url);
     await until(() => page.evaluate(`performance.timeOrigin !== ${beforeReload} && typeof currentSession !== 'undefined' && !!currentSession`), 'board reload');
     await prepare(page);
     await centerCard(page);
-    assert.deepEqual((await page.evaluate(box)).slice(2, 4), [690, 520]);
+    assert.deepEqual((await page.evaluate(box)).slice(4), [-518, 135, 730, 550]);
 
     const reset = await handlePoint(page, 'n');
     await mouse(page, 'mousePressed', reset);
