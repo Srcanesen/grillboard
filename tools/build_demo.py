@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+"""Build the static Recipe box replay. Usage: python3 tools/build_demo.py [output-folder]"""
+
+import ast
+import copy
+import json
+from pathlib import Path
+import shutil
+import sys
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SAMPLE = ROOT / "examples/demo"
+REPLAY_STAGES = ("First round", "First sketch", "Next round", "Settled decisions")
+LAYOUT_DECISIONS = {
+    "a": "The home screen is a plain list of recipes.",
+    "c": "The home screen highlights one featured recipe.",
+}
+
+
+def read_assignment(path):
+    return json.loads(path.read_text(encoding="utf-8").split("=", 1)[1].strip().removesuffix(";"))
+
+
+def replay_data(sample):
+    # Read the recording's data without importing Playwright or the board server.
+    recording = ast.parse(Path(__file__).with_name("record_demo.py").read_text(encoding="utf-8"))
+    literals = {node.targets[0].id: ast.literal_eval(node.value) for node in recording.body
+                if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in {"STAGES", "DECISIONS"}}
+    stages = {stage["name"]: stage for stage in literals["STAGES"]}
+    batches = [action["expected"] for stage in stages.values() for action in stage.get("actions", [])
+               if action["type"] == "send"]
+    applied = {}
+    sessions = []
+    for number, (name, batch) in enumerate(zip(REPLAY_STAGES, [{}, *batches], strict=True)):
+        stage = stages[name]
+        applied.update(batch)
+        session = copy.deepcopy(sample)
+        session.update(status="done" if stage.get("done") else "active", answered=f"a{number}" if number else "")
+        session["questions"] = [q for q in session["questions"] if q["round"] <= stage["round"]]
+        for question in session["questions"]:
+            question.pop("reopened", None)
+            key = question["id"]
+            if key in stage.get("asking", []):
+                question.update(status="asking", answer=None, decision="")
+            if key in applied:
+                question.update(status="settled", answer=applied[key],
+                                decision=literals["DECISIONS"].get(key, question["decision"]))
+        if not stage.get("sketch"):
+            session["sketches"] = []
+        if not stage.get("refs"):
+            session["refs"] = []
+        if stage["round"] < 2:
+            session["architecture"] = []
+        session["research"] = session["research"][:1] if stage.get("research") else []
+        if session["research"]:
+            note = session["research"][0]
+            note["status"] = stage["research"]
+            if note["status"] == "running":
+                note.update(finding="", sources=[], report="")
+        sessions.append(session)
+    return sessions, stages["Answers and research"]["steps"]
+
+
+def build(out_dir):
+    viewer = (ROOT / "skills/grillboard/viewer.html").read_text(encoding="utf-8")
+    marker = "<body>\n"
+    if viewer.count(marker) != 1:
+        raise ValueError("Expected one body opening in viewer.html")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "index.html").write_text(viewer.replace(marker, marker + '  <script src="replay.js"></script>\n'),
+                                        encoding="utf-8")
+    for folder in ("refs", "research", "sketch"):
+        shutil.copytree(SAMPLE / folder, out_dir / folder, dirs_exist_ok=True)
+
+    sample = read_assignment(SAMPLE / "session.js")
+    sessions, steps = replay_data(sample)
+    (out_dir / "research/s1.log").write_text("\n".join(steps) + "\n", encoding="utf-8")
+    layouts = {}
+    layout = next(question for question in sessions[-1]["questions"] if question["id"] == "q8")
+    for option in layout["options"]:
+        source = Path(option["sketch"])
+        target = source.with_name("settled-" + source.name)
+        sketch = (SAMPLE / source).read_text(encoding="utf-8")
+        sketch = (sketch.replace('class="open"', 'class="box"')
+                  .replace("Sign-in is not decided yet", "Sign in with the family passcode")
+                  .replace("Who can edit a recipe?", "Family members can edit; changes keep a history."))
+        (out_dir / target).write_text(sketch, encoding="utf-8")
+        layouts[option["id"]] = {"src": target.as_posix(), "label": option["label"],
+                                 "decision": LAYOUT_DECISIONS.get(option["id"], layout["decision"])}
+
+    refs = read_assignment(SAMPLE / "user.js")["refs"]
+    for ref in refs:
+        ref.pop("added", None)
+    data = json.dumps({"sessions": sessions, "layouts": layouts, "refs": refs}, separators=(",", ":"))
+    (out_dir / "replay.js").write_text(REPLAY.replace("/* DATA */", data), encoding="utf-8")
+    (out_dir / "session.js").write_text("window.__GRILL__ = GrillReplay.session;\n", encoding="utf-8")
+    (out_dir / "user.js").write_text("window.__GRILL_USER__ = GrillReplay.user;\n", encoding="utf-8")
+
+
+REPLAY = """// Generated by tools/build_demo.py.
+const GrillReplay = (() => {
+  const { sessions, layouts, refs } = /* DATA */;
+  const user = { version: 1, refs: [], answers: [], answerRequests: {} };
+  let stage = 0;
+  let session = sessions[stage];
+  const base = new URL('.', document.currentScript.src);
+  const api = new URL('api/', base);
+  const nativeFetch = window.fetch.bind(window);
+  const response = (data, status = 200) => Response.json(data, { status });
+
+  function showSpec(open) {
+    const toggle = document.getElementById('spec-toggle');
+    if ((toggle.getAttribute('aria-expanded') === 'true') !== open) toggle.click();
+  }
+
+  async function advance(items) {
+    session = sessions[++stage];
+    user.refs = refs;
+    if (stage === 2) {
+      const answer = items.find(item => item.question === 'q8');
+      const layout = Object.hasOwn(layouts, answer?.option) ? answer.option : 'b';
+      // Both remaining stages share the same Q8 decision and working sketch revision.
+      for (const state of sessions.slice(stage)) {
+        const question = state.questions.find(q => q.id === 'q8');
+        question.answer.option = layout;
+        question.decision = layouts[layout].decision;
+        const sketch = state.sketches[0];
+        Object.assign(sketch, { src: layouts[layout].src, rev: sketch.rev + 1,
+          note: layouts[layout].label + ' with family sign-in and editing.' });
+      }
+    }
+    await loadFiles();
+    if (session.status === 'done') {
+      showSpec(true);
+    } else if (stage === 1 && workingSketch) {
+      const sketch = workingSketch.nodeId;
+      focusView(true, sketchOnPhone() ? [sketch] : ['q8', sketch]);
+    } else {
+      focusView(true);
+    }
+  }
+
+  window.fetch = async (input, options) => {
+    const url = new URL(input instanceof Request ? input.url : input, base);
+    if (url.origin !== api.origin || !url.pathname.startsWith(api.pathname)) return nativeFetch(input, options);
+    const route = url.pathname.slice(api.pathname.length);
+    if (route === 'ping') {
+      return response({ ok: true, board: 1, session: 'recipe-box-demo', answerRequestIds: true });
+    }
+    if (route === 'answers' && options?.method === 'POST') {
+      const requestId = url.searchParams.get('requestId');
+      const visibleStage = currentSession?.answered === session.answered ? stage : stage - 1;
+      const accepted = user.answers.find(batch => batch.id === user.answerRequests[requestId]) || user.answers[visibleStage];
+      if (accepted) {
+        user.answerRequests[requestId] = accepted.id;
+        return response({ ok: true, batch: accepted });
+      }
+      if (stage === sessions.length - 1) {
+        return response({ ok: false, error: 'There is no open round.' }, 400);
+      }
+      const { items } = JSON.parse(options.body);
+      const batch = { id: 'a' + (stage + 1), items };
+      user.answers.push(batch);
+      user.answerRequests[requestId] = batch.id;
+      setTimeout(() => advance(items), 1200);
+      return response({ ok: true, batch });
+    }
+    if (route.startsWith('refs/') && options?.method === 'POST') {
+      const ref = user.refs.find(ref => 'refs/' + encodeURIComponent(ref.id) === route);
+      const patch = JSON.parse(options.body);
+      if (ref && typeof patch?.note === 'string' && patch.note.length <= 2000 && Object.keys(patch).length === 1) {
+        ref.note = patch.note;
+        return response({ ok: true, ref });
+      }
+    }
+    // Other reference mutations use the board's existing server-required error path.
+    return response({ ok: false, error: currentLabels.needServer }, 403);
+  };
+
+  const style = document.createElement('style');
+  style.textContent = `
+    #demo-bar {
+      position: fixed; inset: 0 0 auto; z-index: 6;
+      display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
+      gap: 4px 16px; padding: 5px 12px; text-align: center;
+      background: var(--card); color: var(--muted); border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    #demo-bar > span:last-child { display: inline-flex; align-items: center; gap: 12px; }
+    #demo-bar button { border: 1px solid var(--border); border-radius: var(--radius-small);
+      background: var(--panel); padding: 2px 8px; }
+    #demo-bar button:hover { border-color: var(--accent); }
+    #demo-bar a { color: var(--accent); }
+    #header { top: calc(var(--demo-bar-height) + 16px); }
+    @media (min-width: 900px) { #spec-panel { top: calc(var(--demo-bar-height) + 16px); } }
+    @media (max-width: 899px) { #spec-panel { max-height: min(60%, calc(100% - var(--demo-bar-height) - 16px)); } }
+  `;
+  document.head.append(style);
+  const bar = document.createElement('div');
+  bar.id = 'demo-bar';
+  bar.innerHTML = `<span>Demo: a recorded session, replayed in your browser</span>
+    <span><button type="button">Restart</button>
+    <a href="https://github.com/Srcanesen/grillboard#install">Install GrillBoard</a></span>`;
+  bar.querySelector('button').addEventListener('click', () => location.reload());
+  document.body.prepend(bar);
+  function measureBar() {
+    document.documentElement.style.setProperty('--demo-bar-height', bar.offsetHeight + 'px');
+  }
+  measureBar();
+  new ResizeObserver(measureBar).observe(bar);
+
+  document.addEventListener('DOMContentLoaded', () => {
+    showSpec(false);
+    function revealOpeningIdea() {
+      // Round focus frames the asking cards. The idea above them also needs space below the demo bar.
+      const idea = document.querySelector('.idea-card').getBoundingClientRect();
+      const top = bar.getBoundingClientRect().bottom + 8;
+      if (idea.top < top) glideView({ ...view, y: view.y + top - idea.top }, false);
+    }
+    if (board.hidden) {
+      const ready = new MutationObserver(() => {
+        if (board.hidden) return;
+        ready.disconnect();
+        revealOpeningIdea();
+      });
+      ready.observe(board, { attributes: true, attributeFilter: ['hidden'] });
+    } else revealOpeningIdea();
+
+    const startup = new AbortController();
+    let fitTimer;
+    function stopStartupFit() {
+      startup.abort();
+      clearTimeout(fitTimer);
+    }
+    for (const event of ['pointerdown', 'wheel', 'keydown']) {
+      window.addEventListener(event, stopStartupFit, { capture: true, passive: true, signal: startup.signal });
+    }
+    window.addEventListener('resize', () => {
+      clearTimeout(fitTimer);
+      fitTimer = setTimeout(() => {
+        if (board.hidden) return;
+        stopStartupFit();
+        fitToScreen();
+      }, 100);
+    }, { signal: startup.signal });
+  }, { once: true });
+
+  return { get session() { return session; }, get user() { return user; } };
+})();
+"""
+
+
+if __name__ == "__main__":
+    build(Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "docs/demo")

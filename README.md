@@ -2,6 +2,8 @@
 
 **A visual grilling skill for Claude Code and other AI coding agents.** The agent interviews you about your idea, and a live board in your browser turns your answers into a decision tree, sketches and a spec. You answer by clicking, not by typing.
 
+Try it in your browser: https://srcanesen.github.io/grillboard/demo/
+
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 ![Dependencies: none](https://img.shields.io/badge/dependencies-none-blue.svg)
 ![Python 3, standard library only](https://img.shields.io/badge/python-3%20stdlib%20only-blue.svg)
@@ -154,6 +156,8 @@ The board may also load reference links to check whether they are images.
 ## Development
 
 Run the tests with `node --test tests/board/*.test.mjs` and `python3 -m unittest discover -s tests/server`. No packages need installing: the pure board tests load the script blocks of `viewer.html` (`grill-session`, `grill-camera`, `grill-layout` and `grill-changes`) in Node, and the server tests start `server.py` in a temporary folder. The browser tests also need Chrome or Chromium (set `CHROME_BIN` to its executable if needed); they run headlessly and skip with a reason when it is unavailable. `GLOSSARY.md` defines the project's words and `docs/adr/` records the decisions behind its shape.
+
+Run `python3 tools/build_demo.py` to rebuild the interactive browser demo in `docs/demo/`.
 
 Run `python3 tools/record_demo.py` to rebuild `docs/demo.gif` and `docs/board.png`; it needs Python Playwright, installed Google Chrome and ffmpeg on `PATH`. Edit the `STAGES` list to change the replay; it uses a temporary sample copy and illustrative closing answers, then stops its server and removes the copy.
 

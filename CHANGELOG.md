@@ -2,6 +2,10 @@
 
 What changed for people who use GrillBoard, newest first.
 
+## Unreleased
+
+- Added an interactive browser demo that replays a recorded session from the first round through the spec.
+
 ## 0.3.0 - 2026-11-18
 
 The sketch stays with you while you answer, and the drawing and the decisions now point at each other.
