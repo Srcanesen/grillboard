@@ -38,7 +38,57 @@ for (const [flow, expected] of [['td', { x: 362, y: 144 }], ['lr', { x: 476, y: 
       assert.equal(parents[id], '@idea');
     }
   });
+
+  test(`the working sketch clears a non-asking sibling in ${flow} at both sizes`, () => {
+    const id = 'sketch:main';
+    const options = { flow, workingSketch: { id, askingIds: ['q1'] } };
+    for (const [width, height] of [[380, 760], [220, 42]]) {
+      const result = layout.layout(input([
+        question('q1'), question('q2'), { id, kind: 'sketch', width, height }
+      ], options));
+      assert.deepEqual(result.positions[id], expected);
+      assert.deepEqual(result.basePositions[id], expected);
+    }
+  });
 }
+
+test('the working sketch clears a later branch using final positions and its current height', () => {
+  const id = 'sketch:main';
+  const questions = [
+    question('q1'), question('q2'), question('q3', ['q1']), question('q4', ['q2']), question('q5', ['q4'])
+  ];
+  const options = { workingSketch: { id, askingIds: ['q3'] }, manualOffsets: { q5: { dx: 520, dy: 0 } } };
+  const open = layout.layout(input([...questions, { id, kind: 'sketch', width: 380, height: 760 }], options));
+  assert.deepEqual(open.positions.q5, { x: 534, y: 472 });
+  assert.deepEqual(open.basePositions[id], { x: 362, y: 308 });
+  assert.deepEqual(open.positions[id], { x: 882, y: 308 });
+  const chip = layout.layout(input([...questions, { id, kind: 'sketch', width: 220, height: 42 }], options));
+  assert.deepEqual(chip.positions[id], { x: 362, y: 308 });
+});
+
+test('a dragged working sketch keeps its position even when it overlaps another card', () => {
+  const id = 'sketch:main';
+  const result = layout.layout(input([
+    question('q1'), question('q2'), { id, kind: 'sketch', width: 380, height: 760 }
+  ], { workingSketch: { id, askingIds: ['q1'], position: { x: 14, y: 144 } } }));
+  assert.deepEqual(result.positions[id], { x: 14, y: 144 });
+});
+
+test('the working sketch clears board-column items and a parked sketch moved into its path', () => {
+  const id = 'sketch:main';
+  const result = layout.layout(input([
+    question('q1'), { id, kind: 'sketch', width: 380, height: 760 },
+    { id: 'ref:loose', kind: 'reference', width: 100, height: 50 },
+    { id: 'research:note', kind: 'research', width: 100, height: 50 },
+    { id: 'report:board', kind: 'report', width: 100, height: 50 },
+    { id: 'sketch:parked', kind: 'sketch', width: 100, height: 60 }
+  ], { workingSketch: { id, askingIds: ['q1'] }, manualOffsets: {
+    'ref:loose': { dx: 790, dy: 150 }, 'research:note': { dx: 1170, dy: 60 },
+    'report:board': { dx: 1570, dy: 0 }, 'sketch:parked': { dx: 1550, dy: 260 }
+  } }));
+  assert.deepEqual(result.basePositions[id], { x: 198, y: 144 });
+  assert.deepEqual(result.positions[id], { x: 1648, y: 144 });
+});
 
 test('a child follows its first valid dependency and keeps secondary links', () => {
   const result = layout.layout(input([question('q1'), question('q2'), question('q3', ['missing', 'q3', 'q2', 'q1'])]));

@@ -851,10 +851,25 @@
           return card ? [card, ...item.refs, ...item.reports] : [];
         }) : [];
         const parkedSketches = roundNodes.length || (working && workingSketch.position) ? sketches.filter(sketch => sketch !== working) : sketches;
-        function besideRound() {
-          return flow === 'lr'
-            ? { x: Math.min(...roundNodes.map(node => positions[node.id].x)), y: Math.max(...roundNodes.map(node => positions[node.id].y + node.height)) + LAYOUT.sketchRoundGap }
-            : { x: Math.max(...roundNodes.map(node => positions[node.id].x + node.width)) + LAYOUT.sketchRoundGap, y: Math.min(...roundNodes.map(node => positions[node.id].y)) };
+        function besideRound(obstacles = []) {
+          const gap = LAYOUT.sketchRoundGap;
+          const point = flow === 'lr'
+            ? { x: Math.min(...roundNodes.map(node => positions[node.id].x)), y: Math.max(...roundNodes.map(node => positions[node.id].y + node.height)) + gap }
+            : { x: Math.max(...roundNodes.map(node => positions[node.id].x + node.width)) + gap, y: Math.min(...roundNodes.map(node => positions[node.id].y)) };
+          const axis = flow === 'lr' ? 'y' : 'x';
+          while (true) {
+            let next = point[axis];
+            for (const node of obstacles) {
+              const { x, y } = positions[node.id];
+              const right = x + node.width + gap, bottom = y + node.height + gap;
+              if (point.x < right && x < point.x + working.width + gap &&
+                  point.y < bottom && y < point.y + working.height + gap) {
+                next = Math.max(next, axis === 'x' ? right : bottom);
+              }
+            }
+            if (!(next > point[axis])) return point;
+            point[axis] = next;
+          }
         }
         const root = items.get(idea.id);
         if (flow === 'lr') {
@@ -895,6 +910,8 @@
           }
         }
         for (const report of boardReports) if (!placedReports.has(report.id)) placeBoardItem(report);
+        const obstacles = roundNodes.length ? [idea, ...questions, ...refs, ...reports, ...boardResearch, ...parkedSketches] : [];
+        if (roundNodes.length) positions[working.id] = besideRound(obstacles);
         const basePositions = copy(positions);
         for (const [nodeId, point] of Object.entries(positions)) {
           let dx = 0, dy = 0, id = nodeId;
@@ -906,7 +923,7 @@
           point.x += dx; point.y += dy;
         }
         if (working && workingSketch.position) positions[working.id] = copy(workingSketch.position);
-        else if (roundNodes.length) positions[working.id] = besideRound();
+        else if (roundNodes.length) positions[working.id] = besideRound(obstacles);
         return freeze({ flow, positions, basePositions, parents, secondary, clusters, levels, edges, boardRefs, boardResearch, boardRefX, researchCaptionY, boardReports, sketches: sketches.map(node => node.id) });
       }
 
