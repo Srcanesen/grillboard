@@ -2181,7 +2181,6 @@
         frame.classList.add('link-hover');
       }
     }
-    // Canvas frames leave dragging and blank-area clicks on the board. Hit-test marked regions through the frame.
     function canvasSketchHit(event) {
       const frame = event.target.closest?.('.sketch-card .sketch-frame');
       const surface = frame?.firstElementChild;
@@ -2193,6 +2192,10 @@
       return { region, frame };
     }
     function questionAt(target) { return target?.closest?.('.question-card')?.dataset.questionId || ''; }
+    function refreshHoverUnderPointer() {
+      const hoverTarget = hoverPoint && document.elementFromPoint(hoverPoint.x, hoverPoint.y);
+      hoveredQuestion = questionAt(hoverTarget);
+    }
     function updateCardHover(event) {
       hoverPoint = event && event.pointerType !== 'touch' ? { x: event.clientX, y: event.clientY } : null;
       const id = hoverPoint ? questionAt(event.target) : '';
@@ -2206,9 +2209,11 @@
       setSketchHover(region, frame);
     });
     document.addEventListener('pointerleave', () => { updateCardHover(); setSketchHover(null); });
+    function canvasHandledClick(event) {
+      return event.detail && canvas.contains(event.target) && (event.target === canvas || Date.now() < suppressClickUntil);
+    }
     document.addEventListener('click', event => {
-      // The canvas already handled captured clicks using their original question.
-      if (event.detail && canvas.contains(event.target) && (event.target === canvas || Date.now() < suppressClickUntil)) return;
+      if (canvasHandledClick(event)) return;
       clearSketchLinks(questionAt(event.target));
     }, true);
     function bindSketchRegions(surface, frame, doc) {
@@ -2611,9 +2616,7 @@
       refreshAnswerControls();
       for (const editor of world.querySelectorAll('.answer-editor')) growAnswer(editor);
       syncSketchLinks(); saveNodeSizes(); measureAndLayout();
-      // A reused or rebuilt card can still be under the same stationary pointer.
-      const hoverTarget = hoverPoint && document.elementFromPoint(hoverPoint.x, hoverPoint.y);
-      hoveredQuestion = questionAt(hoverTarget);
+      refreshHoverUnderPointer();
       syncRegionOutlines(); selectQuestion(selectedQuestion);
       if (focusId && nodeRecords.has(focusId) && !focused.isConnected) {
         const node = nodeRecords.get(focusId).element;
